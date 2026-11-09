@@ -252,7 +252,7 @@ The product is a local-first reflective journal rendered as a living, circular m
 | QA-02 | Browser tests | Playwright covers all primary interaction flows, responsive layout, WebGL fallback, and accessibility. | Implemented |
 | QA-03 | Accessibility | Expanded controls pass automated Axe checks. | Implemented |
 | DOC-01 | Repository README | Document setup, interactions, rendering, geometry, model, validation, and technical tradeoffs. | Implemented |
-| DOC-02 | Clustering plan | Maintain a separate data-model and browser-local clustering design document. | Partial — project artifact exists; repository copy awaits confirmation |
+| DOC-02 | Clustering plan | Maintain a separate data-model and browser-local clustering design document. | Implemented |
 
 ## 14. Verification gates
 
@@ -277,9 +277,8 @@ Before accepting a change:
 
 Six independent implementation audits were assigned, each covering exactly two user requirement messages. Confirmed skipped or partial requirements are reported separately so no unrequested historical changes are made without approval.
 
-### Behavior-level candidates requiring confirmation
+### Intentionally deferred audit candidates
 
 1. **Persistent grouped-cell tint** — the light member fill is currently applied only while its group is selected. The historical requirement reads as an always-on tint.
 2. **Sticky resize-handle shape** — organic sticky geometry is implemented for merge/attach bridges, while resize handles remain simple circles. One historical phrase may have intended the handles themselves to be inward sticky blobs matching the wall stroke.
 3. **Microscope editor keyboard parity** — the bullet-list editor supports Enter split, Option/Alt word movement, and cross-row arrows. The focused microscope editor commits on Enter. Historical wording is ambiguous about whether list behavior should also apply inside the focused cell editor.
-4. **In-repository clustering plan** — the requested data-model and browser-local clustering plan exists in the project artifact store, but is not committed inside this repository.

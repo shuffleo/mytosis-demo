@@ -11,6 +11,11 @@ npm run dev
 
 Open the URL Vite prints, normally `http://localhost:5173`. The verified local session for this prototype uses `http://127.0.0.1:4173`.
 
+## Product and architecture documents
+
+- [Product requirements and implementation ledger](docs/product-requirements.md)
+- [Voronoi data model and browser-local clustering plan](docs/voronoi-data-model-and-clustering.md)
+
 ## Interaction model
 
 - **Add Cell** is the default tool. Pointer movement computes a temporary candidate cell without changing the stored sites; click commits that site and morphs the tessellation. The candidate reserves a readable power cell even in tight three-cell gaps and near corners, temporarily relaxing neighboring text floors so it cannot collapse into an invisible sliver. Pressing the already-active toolbar button places the empty journal near the field centroid with a deterministic minor offset. The model permits at most one empty journal at a time (seeds are excluded), so subsequent Add actions reposition that draft rather than creating blank clutter.
