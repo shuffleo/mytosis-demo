@@ -178,6 +178,7 @@ interface SeedRuntime {
 }
 
 export interface EditorLayout {
+  cellId: string
   x: number
   y: number
   width: number
@@ -3511,6 +3512,7 @@ export class VoronoiCanvasEngine {
     const center = polygonCentroid(visual.currentPoints)
     const bounds = polygonBounds(visual.currentPoints)
     this.callbacks.onEditorLayout({
+      cellId: cell.id,
       x: center.x,
       y: center.y,
       width: clamp(bounds.width * 0.75, 140, 340),

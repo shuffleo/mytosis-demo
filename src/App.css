@@ -14,7 +14,6 @@
   background: #000;
 }
 
-.view-transition-microscope-out .voronoi-stage,
 .view-transition-list-out .list-editor {
   z-index: 21;
   transform-origin: var(--view-transition-origin);
@@ -22,12 +21,34 @@
   pointer-events: none;
 }
 
-.view-transition-list-in .list-editor,
-.view-transition-microscope-in .voronoi-stage {
+.view-transition-list-in .list-editor {
   z-index: 21;
   transform-origin: var(--view-transition-origin);
   animation: view-orbit-in var(--view-phase-duration) var(--view-transition-ease) both;
   pointer-events: none;
+}
+
+.view-transition-microscope-out .microscope-view-track,
+.view-transition-microscope-in .microscope-view-track {
+  z-index: 21;
+  transform-origin: var(--view-transition-origin);
+  pointer-events: none;
+}
+
+.view-transition-microscope-out .microscope-view-track {
+  animation: view-microscope-orbit-out var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.view-transition-microscope-in .microscope-view-track {
+  animation: view-microscope-orbit-in var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.view-transition-microscope-out .microscope-scene {
+  animation: view-microscope-blur-out var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.view-transition-microscope-in .microscope-scene {
+  animation: view-microscope-blur-in var(--view-phase-duration) var(--view-transition-ease) both;
 }
 
 .view-transition-curtain {
@@ -84,6 +105,48 @@
   }
 }
 
+@keyframes view-microscope-orbit-out {
+  0% {
+    opacity: 1;
+    transform: rotate(0deg) scale(1);
+  }
+  55% {
+    opacity: 0.9;
+    transform: rotate(-11deg) scale(0.97);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(-22deg) scale(0.9);
+  }
+}
+
+@keyframes view-microscope-orbit-in {
+  0% {
+    opacity: 0;
+    transform: rotate(22deg) scale(0.9);
+  }
+  45% {
+    opacity: 0.9;
+    transform: rotate(11deg) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+@keyframes view-microscope-blur-out {
+  0% { filter: blur(0); }
+  55% { filter: blur(calc(var(--view-transition-blur) * 0.58)); }
+  100% { filter: blur(var(--view-transition-blur)); }
+}
+
+@keyframes view-microscope-blur-in {
+  0% { filter: blur(var(--view-transition-blur)); }
+  45% { filter: blur(calc(var(--view-transition-blur) * 0.58)); }
+  100% { filter: blur(0); }
+}
+
 @keyframes view-curtain-in {
   0%, 45% { opacity: 0; }
   100% { opacity: 1; }
@@ -94,6 +157,7 @@
   55%, 100% { opacity: 0; }
 }
 
+.microscope-view-track,
 .microscope-viewport-mask,
 .microscope-scene,
 .microscope-source-scene {
@@ -107,6 +171,7 @@
 
 .microscope-scene {
   isolation: isolate;
+  background: #000;
 }
 
 .microscope-source-scene {
@@ -673,12 +738,18 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .view-transition-microscope-out .voronoi-stage,
   .view-transition-list-out .list-editor,
   .view-transition-list-in .list-editor,
-  .view-transition-microscope-in .voronoi-stage {
+  .view-transition-microscope-out .microscope-view-track,
+  .view-transition-microscope-in .microscope-view-track {
     filter: none;
     transform: none;
+    animation-duration: 120ms;
+  }
+
+  .view-transition-microscope-out .microscope-scene,
+  .view-transition-microscope-in .microscope-scene {
+    filter: none;
     animation-duration: 120ms;
   }
 

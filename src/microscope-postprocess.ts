@@ -522,24 +522,24 @@ export class MicroscopePostProcessor {
     this.output.hidden = !enabled
     if (!enabled) return
 
-    // The source layer may be transformed as a WebGL fallback. The output is
-    // fixed optics, so size it from its untransformed scene container.
-    const bounds =
-      this.output.parentElement?.getBoundingClientRect() ??
-      this.source.getBoundingClientRect()
+    // CSS transitions may transform either the fallback source or the whole
+    // microscope track. The render target must stay at the engine's logical
+    // viewport size or those transforms get measured and applied twice.
+    const cssWidth = Math.max(1, this.field.width)
+    const cssHeight = Math.max(1, this.field.height)
     // Headless Chromium renders WebGL through CPU-bound SwiftShader. Use a
     // smaller internal buffer in automation while preserving the exact CSS
     // size, normalized optics, pointer mapping, and production resolution.
     const pixelRatio = navigator.webdriver
       ? 0.25
       : Math.min(2, Math.max(1, window.devicePixelRatio || 1))
-    const width = Math.max(1, Math.round(bounds.width * pixelRatio))
-    const height = Math.max(1, Math.round(bounds.height * pixelRatio))
+    const width = Math.max(1, Math.round(cssWidth * pixelRatio))
+    const height = Math.max(1, Math.round(cssHeight * pixelRatio))
     if (this.output.width !== width || this.output.height !== height) {
       this.output.width = width
       this.output.height = height
-      this.output.style.width = `${bounds.width}px`
-      this.output.style.height = `${bounds.height}px`
+      this.output.style.width = `${cssWidth}px`
+      this.output.style.height = `${cssHeight}px`
     }
 
     gl.viewport(0, 0, width, height)

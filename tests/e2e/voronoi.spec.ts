@@ -16,6 +16,25 @@ function polygonArea(points: readonly Point2[]) {
   return Math.abs(twiceArea) / 2
 }
 
+function polygonCentroid(points: readonly Point2[]) {
+  let twiceArea = 0
+  let x = 0
+  let y = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]
+    const next = points[(index + 1) % points.length]
+    const cross = current.x * next.y - next.x * current.y
+    twiceArea += cross
+    x += (current.x + next.x) * cross
+    y += (current.y + next.y) * cross
+  }
+  if (Math.abs(twiceArea) < 1e-6) return points[0] ?? { x: 0, y: 0 }
+  return {
+    x: x / (3 * twiceArea),
+    y: y / (3 * twiceArea),
+  }
+}
+
 interface Cell {
   id: string
   text: string
@@ -596,6 +615,10 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   await expect
     .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
     .toBe('editing')
+  await expect(page.locator('.voronoi-stage')).toHaveAttribute(
+    'data-focused-cell',
+    'cell-4',
+  )
   const editorStyle = await editor.evaluate((element) => {
     const style = getComputedStyle(element)
     return {
@@ -610,6 +633,16 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   expect(editorStyle.background).toBe('rgba(0, 0, 0, 0)')
   expect(editorStyle.border).toBe('0px')
   const focusedPostProcess = await postProcessSnapshot(page)
+  const focusedCanvas = await snapshot(page)
+  const focusedCellCenter = polygonCentroid(focusedCanvas.cells['cell-4'])
+  expect(
+    focusedCellCenter.x * focusedPostProcess.focusScene.scale +
+      focusedPostProcess.focusScene.translate.x,
+  ).toBeCloseTo(focusedCanvas.field.center.x, 4)
+  expect(
+    focusedCellCenter.y * focusedPostProcess.focusScene.scale +
+      focusedPostProcess.focusScene.translate.y,
+  ).toBeCloseTo(focusedCanvas.field.center.y, 4)
   expect(focusedPostProcess.focusScene.scale).toBeGreaterThan(1)
   expect(focusedPostProcess.focusScene.orbitAngle).toBeCloseTo(0, 5)
   expect(focusedPostProcess.focusScene.opacity).toBeCloseTo(1, 5)

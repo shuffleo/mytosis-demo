@@ -230,22 +230,51 @@ test('expires an untouched seed, while promotion cancels the countdown', async (
 test('switches to the shared-model list editor and restores the microscope', async ({ page }) => {
   const postBefore = await page.evaluate(() => window.__VORONOI_DEBUG__?.postProcess())
   expect(postBefore?.active).toBe(true)
+  const renderTargetBefore = await page.getByTestId('microscope-canvas').evaluate(
+    (canvas: HTMLCanvasElement) => ({
+      width: canvas.width,
+      height: canvas.height,
+      cssWidth: canvas.style.width,
+      cssHeight: canvas.style.height,
+    }),
+  )
   const beforeCount = (await debugSnapshot(page))?.cellCount ?? 0
   await page.getByTestId('list-view-toggle').click()
   await expect(page.locator('.app-shell')).toHaveClass(/view-transition-microscope-out/)
   await expect(page.locator('.view-transition-curtain')).toBeVisible()
-  const outgoingFrame = await page.locator('.voronoi-stage').evaluate((element) => ({
+  const outgoingTrack = await page.getByTestId('microscope-view-track').evaluate((element) => ({
     animationName: getComputedStyle(element).animationName,
     animationDuration: getComputedStyle(element).animationDuration,
     runningAnimations: element.getAnimations().length,
   }))
+  const outgoingScene = await page.locator('.microscope-scene').evaluate((element) => ({
+    animationName: getComputedStyle(element).animationName,
+    runningAnimations: element.getAnimations().length,
+  }))
+  const fixedStageAnimation = await page.locator('.voronoi-stage').evaluate(
+    (element) => getComputedStyle(element).animationName,
+  )
   const curtainAnimation = await page.locator('.view-transition-curtain').evaluate((element) => ({
     animationName: getComputedStyle(element).animationName,
     runningAnimations: element.getAnimations().length,
   }))
-  expect(outgoingFrame.animationName).toBe('view-orbit-out')
-  expect(outgoingFrame.animationDuration).not.toBe('0s')
-  expect(outgoingFrame.runningAnimations).toBeGreaterThan(0)
+  expect(fixedStageAnimation).toBe('none')
+  expect(outgoingTrack.animationName).toBe('view-microscope-orbit-out')
+  expect(outgoingTrack.animationDuration).not.toBe('0s')
+  expect(outgoingTrack.runningAnimations).toBeGreaterThan(0)
+  expect(outgoingScene.animationName).toBe('view-microscope-blur-out')
+  expect(outgoingScene.runningAnimations).toBeGreaterThan(0)
+  await page.waitForTimeout(140)
+  expect(
+    await page.getByTestId('microscope-canvas').evaluate(
+      (canvas: HTMLCanvasElement) => ({
+        width: canvas.width,
+        height: canvas.height,
+        cssWidth: canvas.style.width,
+        cssHeight: canvas.style.height,
+      }),
+    ),
+  ).toEqual(renderTargetBefore)
   expect(curtainAnimation.animationName).toBe('view-curtain-in')
   expect(curtainAnimation.runningAnimations).toBeGreaterThan(0)
   await expect(page.getByTestId('list-view')).toBeVisible()
@@ -332,9 +361,27 @@ test('switches to the shared-model list editor and restores the microscope', asy
 
   await page.getByTestId('return-microscope').click()
   await expect(page.locator('.app-shell')).toHaveClass(/view-transition-list-out/)
+  await expect
+    .poll(async () => page.locator('.list-editor').evaluate(
+      (element) => getComputedStyle(element).animationName,
+    ))
+    .toBe('view-orbit-out')
   await expect(page.getByTestId('list-view')).toHaveCount(0)
   await expect(page.getByTestId('voronoi-canvas')).toBeVisible()
   await expect(page.getByTestId('settings-toggle')).toBeVisible()
+  await expect(page.locator('.app-shell')).toHaveClass(/view-transition-microscope-in/)
+  const incomingTrack = await page.getByTestId('microscope-view-track').evaluate((element) => ({
+    animationName: getComputedStyle(element).animationName,
+    runningAnimations: element.getAnimations().length,
+  }))
+  const incomingScene = await page.locator('.microscope-scene').evaluate((element) => ({
+    animationName: getComputedStyle(element).animationName,
+    runningAnimations: element.getAnimations().length,
+  }))
+  expect(incomingTrack.animationName).toBe('view-microscope-orbit-in')
+  expect(incomingTrack.runningAnimations).toBeGreaterThan(0)
+  expect(incomingScene.animationName).toBe('view-microscope-blur-in')
+  expect(incomingScene.runningAnimations).toBeGreaterThan(0)
   await expect
     .poll(async () => (await page.evaluate(() => window.__VORONOI_DEBUG__?.postProcess()))?.active)
     .toBe(true)

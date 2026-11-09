@@ -158,6 +158,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   }
 
   const positionEditor = (layout: EditorLayout) => {
+    if (editingRef.current && layout.cellId !== editingRef.current.id) return
     latestLayoutRef.current = layout
     setFocusLayout((current) =>
       current &&
@@ -197,15 +198,12 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
         onEditRequested: (cellId, text, ghostPrompt) => {
           const nextEditing = { id: cellId, value: text, originalValue: text, ghostPrompt }
           editingRef.current = nextEditing
+          setFocusLayout(null)
           setEditing(nextEditing)
         },
         onEditorLayout: positionEditor,
         onSelectionChanged: setSelection,
         onCanvasChanged: (field, animated) => {
-          const circleClip = `circle(${field.radius}px at ${field.center.x}px ${field.center.y}px)`
-          canvas.style.clipPath = circleClip
-          postProcessCanvas.style.clipPath = circleClip
-          wallTextureCanvas.style.clipPath = circleClip
           const nextBounds = { center: { ...field.center }, radius: field.radius }
           fieldBoundsRef.current = nextBounds
           setFieldBounds((current) =>
@@ -569,13 +567,18 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   }
 
   useEffect(() => {
-    if (!editing || !focusLayout || focusProgressRef.current >= 1) return
+    if (
+      !editing ||
+      !focusLayout ||
+      focusLayout.cellId !== editing.id ||
+      focusProgressRef.current >= 1
+    ) return
     setFocusExiting(false)
     setFocusPhase('entering')
     animateFocusTo(1, () => setFocusPhase('editing'))
     // Enter once per editing session after its geometry is available.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing?.id, focusLayout !== null])
+  }, [editing?.id, focusLayout?.cellId])
 
   useEffect(() => {
     if (!focusExiting) return
@@ -608,6 +611,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       className={`voronoi-stage ${suspended ? 'is-suspended' : ''}`}
       aria-hidden={suspended}
       data-focus-phase={focusPhase}
+      data-focused-cell={focusLayout?.cellId}
       style={focusStyle}
     >
       <svg className="wall-filter-defs" aria-hidden="true" width="0" height="0">
@@ -637,38 +641,40 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
           </filter>
         </defs>
       </svg>
-      <div
-        className="microscope-viewport-mask"
-        style={{
-          clipPath: `circle(${fieldBounds.radius}px at ${fieldBounds.center.x}px ${fieldBounds.center.y}px)`,
-        }}
-      >
+      <div className="microscope-view-track" data-testid="microscope-view-track">
         <div
-          className={`microscope-scene ${editing ? 'is-focus-editing' : ''} ${focusExiting ? 'is-focus-exiting' : ''}`}
+          className="microscope-viewport-mask"
+          style={{
+            clipPath: `circle(${fieldBounds.radius}px at ${fieldBounds.center.x}px ${fieldBounds.center.y}px)`,
+          }}
         >
-          <div ref={sourceSceneRef} className="microscope-source-scene">
+          <div
+            className={`microscope-scene ${editing ? 'is-focus-editing' : ''} ${focusExiting ? 'is-focus-exiting' : ''}`}
+          >
+            <div ref={sourceSceneRef} className="microscope-source-scene">
+              <canvas
+                ref={canvasRef}
+                className="voronoi-canvas"
+                data-testid="voronoi-canvas"
+                tabIndex={blocked || suspended ? -1 : 0}
+                role="application"
+                aria-label="Interactive journal cell canvas"
+                onKeyDown={handleCanvasKeyDown}
+              />
+              <canvas
+                ref={wallTextureCanvasRef}
+                className="wall-texture-canvas"
+                data-testid="wall-texture-canvas"
+                aria-hidden="true"
+              />
+            </div>
             <canvas
-              ref={canvasRef}
-              className="voronoi-canvas"
-              data-testid="voronoi-canvas"
-              tabIndex={blocked || suspended ? -1 : 0}
-              role="application"
-              aria-label="Interactive journal cell canvas"
-              onKeyDown={handleCanvasKeyDown}
-            />
-            <canvas
-              ref={wallTextureCanvasRef}
-              className="wall-texture-canvas"
-              data-testid="wall-texture-canvas"
+              ref={postProcessCanvasRef}
+              className="microscope-canvas"
+              data-testid="microscope-canvas"
               aria-hidden="true"
             />
           </div>
-          <canvas
-            ref={postProcessCanvasRef}
-            className="microscope-canvas"
-            data-testid="microscope-canvas"
-            aria-hidden="true"
-          />
         </div>
       </div>
       {editing && (

@@ -104,6 +104,7 @@ The product is a local-first reflective journal rendered as a living, circular m
 | TXT-18 | Tracked focus scene | A visible feature flag slides a new focused scene along the microscope/list circular track, with arc depth defaulting to 1.8. | Implemented 2026-11-10 |
 | TXT-19 | Legacy focus path | Turning tracked focus off retains the prior direct zoom behavior. | Implemented 2026-11-10 |
 | TXT-20 | Synchronized exit | Scene, vignette, and border finish together without bottom-right exposure, duplicate vectors, or settling jitter. | Implemented 2026-11-10 |
+| TXT-21 | Correct focus target | The focused background transform must use the layout for the cell that initiated editing; stale layouts from another cell are rejected. | Implemented 2026-11-10 |
 
 ## 6. Auto-growth seeds and incubation
 
@@ -212,6 +213,8 @@ The product is a local-first reflective journal rendered as a living, circular m
 | VIEW-06 | Controls | Enable, total duration, peak blur, arc depth, and easing are in Tweakpane. | Implemented |
 | VIEW-07 | Input lock | Prevent duplicate mode switches during transition. | Implemented |
 | VIEW-08 | Reduced motion | Keep a short non-orbital state transition when reduced motion is preferred. | Implemented |
+| VIEW-09 | Unified microscope track | Circular clip, scene, vignette, noise, and black backing move as one orbital layer in both directions; blur stays inside the moving clip. | Implemented 2026-11-10 |
+| VIEW-10 | Stable render target | CSS transforms never resize the WebGL backing buffer or apply orbital scale twice. | Implemented 2026-11-10 |
 
 ## 12. Microscope shaders and wall treatment
 
