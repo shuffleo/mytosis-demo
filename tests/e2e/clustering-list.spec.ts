@@ -234,17 +234,20 @@ test('switches to the shared-model list editor and restores the microscope', asy
   await page.getByTestId('list-view-toggle').click()
   await expect(page.locator('.app-shell')).toHaveClass(/view-transition-microscope-out/)
   await expect(page.locator('.view-transition-curtain')).toBeVisible()
-  await page.waitForTimeout(160)
   const outgoingFrame = await page.locator('.voronoi-stage').evaluate((element) => ({
-    opacity: Number.parseFloat(getComputedStyle(element).opacity),
-    transform: getComputedStyle(element).transform,
+    animationName: getComputedStyle(element).animationName,
+    animationDuration: getComputedStyle(element).animationDuration,
+    runningAnimations: element.getAnimations().length,
   }))
-  const curtainOpacity = await page.locator('.view-transition-curtain').evaluate((element) =>
-    Number.parseFloat(getComputedStyle(element).opacity),
-  )
-  expect(outgoingFrame.opacity).toBeGreaterThan(0.7)
-  expect(outgoingFrame.transform).not.toBe('none')
-  expect(curtainOpacity).toBeLessThan(0.35)
+  const curtainAnimation = await page.locator('.view-transition-curtain').evaluate((element) => ({
+    animationName: getComputedStyle(element).animationName,
+    runningAnimations: element.getAnimations().length,
+  }))
+  expect(outgoingFrame.animationName).toBe('view-orbit-out')
+  expect(outgoingFrame.animationDuration).not.toBe('0s')
+  expect(outgoingFrame.runningAnimations).toBeGreaterThan(0)
+  expect(curtainAnimation.animationName).toBe('view-curtain-in')
+  expect(curtainAnimation.runningAnimations).toBeGreaterThan(0)
   await expect(page.getByTestId('list-view')).toBeVisible()
   await expect(page.getByTestId('voronoi-canvas')).toBeHidden()
   await expect(page.getByTestId('settings-toggle')).toHaveCount(0)

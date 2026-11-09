@@ -87,6 +87,7 @@ interface MoveGesture {
   pendingAttachGroupId: string | null
   attachCandidateGroupId: string | null
   attachCandidateSince: number | null
+  attachCandidatePosition: Point2 | null
   attachArmedGroupId: string | null
   historyCaptured: boolean
   mergeIntent?: MergeIntent
@@ -1223,6 +1224,7 @@ export class VoronoiCanvasEngine {
         pendingAttachGroupId: null,
         attachCandidateGroupId: null,
         attachCandidateSince: null,
+        attachCandidatePosition: null,
         attachArmedGroupId: null,
         historyCaptured: false,
         mergeIntent: this.makeNewSelectMergeIntent(hitCell),
@@ -1325,11 +1327,24 @@ export class VoronoiCanvasEngine {
     }
 
     if (gesture.kind === 'move' && !cell.groupId) {
-      gesture.pendingAttachGroupId = this.findAttachableGroup(cell)
       const nearbyGroupId = this.findNearbyGroupWall(cell)
+      gesture.pendingAttachGroupId = this.findAttachableGroup(cell)
+      const candidatePosition = this.pixelFromSite(cell.site)
       if (nearbyGroupId !== gesture.attachCandidateGroupId) {
         gesture.attachCandidateGroupId = nearbyGroupId
         gesture.attachCandidateSince = nearbyGroupId ? this.lastFrameTime * 1000 : null
+        gesture.attachCandidatePosition = nearbyGroupId ? candidatePosition : null
+        gesture.attachArmedGroupId = null
+      } else if (
+        nearbyGroupId &&
+        gesture.attachCandidatePosition &&
+        distance(candidatePosition, gesture.attachCandidatePosition) >
+          Math.max(3, this.settings.group.attachDistancePx * 0.12)
+      ) {
+        // "Drag and hold" starts only after the pointer settles near one
+        // wall location. Time spent traversing the sticky zone is not dwell.
+        gesture.attachCandidateSince = this.lastFrameTime * 1000
+        gesture.attachCandidatePosition = candidatePosition
         gesture.attachArmedGroupId = null
       }
       this.updateGroupAttachDwell(this.lastFrameTime * 1000)
@@ -1424,8 +1439,10 @@ export class VoronoiCanvasEngine {
       if (group.memberIds.length < this.settings.group.attachContactThreshold) continue
       const inner = this.groupInnerPolygons.get(group.id)
       if (!inner || !pointInPolygon(point, inner)) continue
-      const requiredDepth =
-        this.settings.group.wallGap + this.settings.geometry.seamGap * 0.35
+      const requiredDepth = Math.max(
+        this.settings.group.wallGap + this.settings.geometry.seamGap * 0.35,
+        this.settings.group.attachDistancePx * 0.75,
+      )
       if (distanceToPolygonEdges(point, inner) < requiredDepth) continue
       const contacts = group.memberIds
         .map((id) => this.findCell(id))
@@ -1478,6 +1495,7 @@ export class VoronoiCanvasEngine {
     if (!cell || this.findNearbyGroupWall(cell) !== gesture.attachCandidateGroupId) {
       gesture.attachCandidateGroupId = null
       gesture.attachCandidateSince = null
+      gesture.attachCandidatePosition = null
       return
     }
     if (nowMs - gesture.attachCandidateSince < this.settings.group.attachHoldMs) return

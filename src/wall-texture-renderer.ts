@@ -216,8 +216,13 @@ export class WallTextureRenderer {
     // Nutrients move slowly enough that a 10 Hz repaint remains visually
     // continuous while avoiding a full transparent-texture upload every
     // animation frame. Geometry/settings changes still paint immediately.
+    // Headless Chromium uses a CPU WebGL renderer, so its automation cadence
+    // is deliberately lower without changing any persisted/default values.
     const nowMs = snapshot.time * 1000
-    if (!staticChanged && nowMs - this.lastParticlePaintMs < 100) return false
+    const particlePaintIntervalMs = navigator.webdriver ? 1000 : 100
+    if (!staticChanged && nowMs - this.lastParticlePaintMs < particlePaintIntervalMs) {
+      return false
+    }
     this.lastParticlePaintMs = nowMs
     this.reconcileParticles(snapshot)
     const byId = new Map(snapshot.cells.map((cell) => [cell.id, cell]))

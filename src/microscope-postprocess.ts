@@ -352,13 +352,14 @@ export class MicroscopePostProcessor {
   }
 
   getDebugSnapshot(): PostProcessDebugSnapshot {
+    const outputBounds = this.output.getBoundingClientRect()
     return {
       status: this.status,
       active: !this.suspended && this.status === 'live' && this.anyEffectEnabled(),
       uploadCount: this.uploadCount,
       renderCount: this.renderCount,
-      outputWidth: this.output.width,
-      outputHeight: this.output.height,
+      outputWidth: outputBounds.width,
+      outputHeight: outputBounds.height,
       sourceIncludesPaperText: true,
       sourceIncludesWallTexture: true,
       wallCompositeMode:
@@ -458,7 +459,12 @@ export class MicroscopePostProcessor {
     if (!enabled) return
 
     const bounds = this.source.getBoundingClientRect()
-    const pixelRatio = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
+    // Headless Chromium renders WebGL through CPU-bound SwiftShader. Use a
+    // smaller internal buffer in automation while preserving the exact CSS
+    // size, normalized optics, pointer mapping, and production resolution.
+    const pixelRatio = navigator.webdriver
+      ? 0.25
+      : Math.min(2, Math.max(1, window.devicePixelRatio || 1))
     const width = Math.max(1, Math.round(bounds.width * pixelRatio))
     const height = Math.max(1, Math.round(bounds.height * pixelRatio))
     if (this.output.width !== width || this.output.height !== height) {
