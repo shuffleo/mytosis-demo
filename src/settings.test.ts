@@ -80,8 +80,10 @@ describe('refined control defaults', () => {
       easing: 'smooth',
     })
     expect(defaultSettings.editFocus).toEqual({
-      durationMs: 720,
-      blurPx: 18,
+      trackTransitionEnabled: true,
+      durationMs: 1100,
+      blurPx: 24,
+      arcDepth: 1.8,
       coverage: 0.8,
       easing: 'smooth',
     })
@@ -135,7 +137,7 @@ describe('refined control defaults', () => {
     })
     expect(migrated.geometry.seamGap).toBe(18)
     expect(migrated.effects).toEqual(defaultSettings.effects)
-    expect(migrated.schemaVersion).toBe(9)
+    expect(migrated.schemaVersion).toBe(10)
     expect(migrated.seed.expirySeconds).toBe(180)
     expect(migrated.clustering.autoK).toBe(true)
   })
@@ -149,7 +151,7 @@ describe('refined control defaults', () => {
     legacy.effects.vignette.grain = 0
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(9)
+    expect(migrated.schemaVersion).toBe(10)
     expect(migrated.effects.vignette.grain).toBe(0)
     expect(migrated.effects.lens.glow).toBe(0.2)
     expect(migrated.effects.lens.glowRadius).toBe(2.5)
@@ -162,7 +164,7 @@ describe('refined control defaults', () => {
     delete (legacy.geometry as Partial<typeof legacy.geometry>).wallGrain
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(9)
+    expect(migrated.schemaVersion).toBe(10)
     expect(migrated.effects.circle.grain).toBe(0.04)
     expect(migrated.geometry.wallGrain).toBe(0.65)
   })
@@ -187,11 +189,25 @@ describe('refined control defaults', () => {
     delete (legacy.palette as Partial<typeof legacy.palette>).group8
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(9)
+    expect(migrated.schemaVersion).toBe(10)
     expect(migrated.geometry.wallGrainEnabled).toBe(true)
     expect(migrated.particles).toEqual(defaultSettings.particles)
     expect(migrated.editFocus).toEqual(defaultSettings.editFocus)
     expect(migrated.palette.group8).toBe(defaultSettings.palette.group8)
+  })
+
+  it('adds the tracked focus transition controls to version nine settings', () => {
+    const legacy = structuredClone(defaultSettings)
+    legacy.schemaVersion = 9
+    delete (
+      legacy.editFocus as Partial<typeof legacy.editFocus>
+    ).trackTransitionEnabled
+    delete (legacy.editFocus as Partial<typeof legacy.editFocus>).arcDepth
+
+    const migrated = migrateSettings(legacy)
+    expect(migrated.schemaVersion).toBe(10)
+    expect(migrated.editFocus.trackTransitionEnabled).toBe(true)
+    expect(migrated.editFocus.arcDepth).toBe(1.8)
   })
 
   it('rotates the eight group colors deterministically', () => {

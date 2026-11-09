@@ -16,6 +16,17 @@ export interface PostProcessDebugSnapshot {
   wallCompositeMode: 'pre-shader' | 'fallback-overlay'
   pointerEvents: string
   field: PostProcessField
+  focusScene: FocusSceneState
+}
+
+export interface FocusSceneState {
+  scale: number
+  translate: Point2
+  orbitAngle: number
+  orbitScale: number
+  orbitOrigin: Point2
+  blurPx: number
+  opacity: number
 }
 
 const VERTEX_SHADER = `#version 300 es
@@ -39,6 +50,13 @@ uniform float uWallGrainEnabled;
 uniform float uWallDisplacement;
 uniform float uWallFrequency;
 uniform float uWallOctaves;
+uniform float uContentScale;
+uniform vec2 uContentTranslate;
+uniform float uOrbitAngle;
+uniform float uOrbitScale;
+uniform vec2 uOrbitOrigin;
+uniform float uFocusBlur;
+uniform float uSceneOpacity;
 
 uniform float uVignetteEnabled;
 uniform float uVignetteIntensity;
@@ -86,14 +104,16 @@ float valueNoise(vec2 point) {
 float wallNoise(vec2 point) {
   float value = 0.0;
   float amplitude = 0.55;
+  float amplitudeSum = 0.0;
   vec2 samplePoint = point;
   for (int octave = 0; octave < 4; octave++) {
     if (float(octave) >= uWallOctaves) break;
     value += valueNoise(samplePoint) * amplitude;
+    amplitudeSum += amplitude;
     samplePoint = samplePoint * 2.07 + vec2(17.3, 9.1);
     amplitude *= 0.5;
   }
-  return value;
+  return value / max(0.001, amplitudeSum);
 }
 
 vec2 wallOffset(vec2 sourcePx) {
@@ -103,13 +123,33 @@ vec2 wallOffset(vec2 sourcePx) {
     wallNoise(frequencyPoint + vec2(5.2, 1.7)),
     wallNoise(frequencyPoint + vec2(19.4, 31.8))
   ) - 0.5;
-  return displacement * uWallDisplacement / uResolution;
+  return displacement * 2.0 * uWallDisplacement / uResolution;
+}
+
+vec2 inverseSceneTransform(vec2 displayPx) {
+  vec2 orbitLocal = (displayPx - uOrbitOrigin) / max(0.001, uOrbitScale);
+  float cosine = cos(-uOrbitAngle);
+  float sine = sin(-uOrbitAngle);
+  vec2 unrotated = vec2(
+    orbitLocal.x * cosine - orbitLocal.y * sine,
+    orbitLocal.x * sine + orbitLocal.y * cosine
+  ) + uOrbitOrigin;
+  return (unrotated - uContentTranslate) / max(0.001, uContentScale);
 }
 
 vec4 compositeScene(vec2 uv, vec2 displacement) {
-  vec4 scene = texture(uScene, uv);
-  vec4 walls = texture(uWalls, uv + displacement);
-  return mix(scene, walls, walls.a);
+  float sceneInBounds =
+    step(0.0, uv.x) * step(uv.x, 1.0) *
+    step(0.0, uv.y) * step(uv.y, 1.0);
+  vec2 wallUv = uv + displacement;
+  float wallsInBounds =
+    step(0.0, wallUv.x) * step(wallUv.x, 1.0) *
+    step(0.0, wallUv.y) * step(wallUv.y, 1.0);
+  vec4 scene = texture(uScene, clamp(uv, 0.0, 1.0)) * sceneInBounds;
+  vec4 walls = texture(uWalls, clamp(wallUv, 0.0, 1.0)) * wallsInBounds;
+  vec4 composited = mix(scene, walls, walls.a);
+  composited.rgb *= uSceneOpacity;
+  return composited;
 }
 
 float radialScale(vec2 normalized, float radius) {
@@ -156,7 +196,8 @@ void main() {
   if (radius > 1.0) discard;
 
   float scale = radialScale(relative, radius);
-  vec2 sourcePx = uFieldCenter + relative * uFieldRadius * scale;
+  vec2 opticalSourcePx = uFieldCenter + relative * uFieldRadius * scale;
+  vec2 sourcePx = inverseSceneTransform(opticalSourcePx);
   vec2 sourceUv = sourcePx / uResolution;
   float rim = uVignetteEnabled > 0.5
     ? smoothstep(
@@ -165,7 +206,10 @@ void main() {
         radius
       )
     : 0.0;
-  float blurPx = uLensEnabled * uFrost + uVignetteEnabled * uVignetteBlur * rim;
+  float blurPx =
+    uLensEnabled * uFrost +
+    uVignetteEnabled * uVignetteBlur * rim +
+    uFocusBlur;
   vec2 direction = radius > 0.0001 ? relative / radius : vec2(0.0);
   float chromaPx = uLensEnabled * uAberration + uCrtEnabled * uColorShift;
   vec2 chromaOffset = direction * chromaPx / uResolution;
@@ -266,6 +310,15 @@ export class MicroscopePostProcessor {
   private suspended = false
   private activeUntil = performance.now() + 1800
   private idleFrameRendered = false
+  private focusScene: FocusSceneState = {
+    scale: 1,
+    translate: { x: 0, y: 0 },
+    orbitAngle: 0,
+    orbitScale: 1,
+    orbitOrigin: { x: 0, y: 0 },
+    blurPx: 0,
+    opacity: 1,
+  }
 
   constructor(
     source: HTMLCanvasElement,
@@ -332,6 +385,16 @@ export class MicroscopePostProcessor {
     }
   }
 
+  setFocusScene(state: FocusSceneState) {
+    this.focusScene = {
+      ...state,
+      translate: { ...state.translate },
+      orbitOrigin: { ...state.orbitOrigin },
+    }
+    this.wake()
+    this.requestFrame(true)
+  }
+
   mapPointer(point: Point2) {
     if (this.suspended || this.status !== 'live' || !this.anyEffectEnabled()) return { ...point }
     return mapPostProcessedPoint(point, this.field, this.settings)
@@ -366,6 +429,7 @@ export class MicroscopePostProcessor {
         this.status === 'live' ? 'pre-shader' : 'fallback-overlay',
       pointerEvents: getComputedStyle(this.output).pointerEvents,
       field: structuredClone(this.field),
+      focusScene: structuredClone(this.focusScene),
     }
   }
 
@@ -458,7 +522,11 @@ export class MicroscopePostProcessor {
     this.output.hidden = !enabled
     if (!enabled) return
 
-    const bounds = this.source.getBoundingClientRect()
+    // The source layer may be transformed as a WebGL fallback. The output is
+    // fixed optics, so size it from its untransformed scene container.
+    const bounds =
+      this.output.parentElement?.getBoundingClientRect() ??
+      this.source.getBoundingClientRect()
     // Headless Chromium renders WebGL through CPU-bound SwiftShader. Use a
     // smaller internal buffer in automation while preserving the exact CSS
     // size, normalized optics, pointer mapping, and production resolution.
@@ -552,6 +620,21 @@ export class MicroscopePostProcessor {
     uniform1f('uWallDisplacement', geometry.wallGrain)
     uniform1f('uWallFrequency', geometry.wallGrainFrequency)
     uniform1f('uWallOctaves', geometry.wallGrainOctaves)
+    uniform1f('uContentScale', this.focusScene.scale)
+    gl.uniform2f(
+      gl.getUniformLocation(program, 'uContentTranslate'),
+      this.focusScene.translate.x * scaleX,
+      height * (1 - this.focusScene.scale) - this.focusScene.translate.y * scaleY,
+    )
+    uniform1f('uOrbitAngle', -this.focusScene.orbitAngle)
+    uniform1f('uOrbitScale', this.focusScene.orbitScale)
+    gl.uniform2f(
+      gl.getUniformLocation(program, 'uOrbitOrigin'),
+      this.focusScene.orbitOrigin.x * scaleX,
+      height - this.focusScene.orbitOrigin.y * scaleY,
+    )
+    uniform1f('uFocusBlur', this.focusScene.blurPx * pixelRatio)
+    uniform1f('uSceneOpacity', this.focusScene.opacity)
     uniform1f('uVignetteEnabled', vignette.enabled ? 1 : 0)
     uniform1f('uVignetteIntensity', vignette.intensity)
     uniform1f('uVignetteDim', vignette.dim)

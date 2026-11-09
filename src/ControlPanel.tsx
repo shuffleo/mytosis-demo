@@ -19,7 +19,7 @@ const CONTROL_HINTS: Record<string, string> = {
   Autogroup: 'Focused controls for deterministic local TF-IDF clustering.',
   'Experimental merge / split': 'Enables sticky thought composition and long-press decomposition.',
   'View transition': 'Controls the optical zoom-level transition between microscope and list views.',
-  'Focused text editing': 'Controls the blur-and-zoom camera move used for cell text editing.',
+  'Focused text editing': 'Controls the fixed-lens scene transition used for cell text editing.',
   Palette: 'Live colors for cells, walls, text, states, field, and exterior.',
   renderer: 'Shows whether the GPU microscope renderer is active.',
   enabled: 'Turns this effect or experimental behavior on and off.',
@@ -47,11 +47,11 @@ const CONTROL_HINTS: Record<string, string> = {
   'seam gap': 'Sets the open spacing between neighboring cells.',
   'outer gap': 'Sets the breathing room between cells and the circle edge.',
   'text inset': 'Keeps wrapped text this far from every cell boundary.',
-  'wall grain': 'Controls the SVG turbulence displacement on walls and the outer edge.',
-  'grain enabled': 'Shows or hides the dedicated SVG-filtered wall and outer-edge texture layer.',
-  'grain frequency': 'Sets the spatial scale of SVG fractal noise along walls.',
-  'grain detail': 'Sets the number of SVG turbulence octaves used by the pencil texture.',
-  'grain opacity': 'Sets the opacity of the SVG-filtered wall overlay.',
+  'wall grain': 'Controls turbulence displacement on cell and group walls.',
+  'grain enabled': 'Enables the pre-shader pencil texture for cell and group walls.',
+  'grain frequency': 'Sets the spatial scale of the wall grain.',
+  'grain detail': 'Sets the number of noise octaves used by the pencil texture.',
+  'grain opacity': 'Sets the opacity of the pre-shader wall texture.',
   'nutrients enabled': 'Shows or hides seam particles without changing geometry.',
   'particles per cell': 'Sets the restrained number of orbiting particles around each cell.',
   'particle speed': 'Sets particle angular speed; the default is roughly ten times slower than the reference.',
@@ -105,8 +105,10 @@ const CONTROL_HINTS: Record<string, string> = {
   'maximum blur': 'Sets the peak blur while the view fades through black.',
   'arc depth': 'Moves the circular track centroid farther below the viewport.',
   'transition easing': 'Chooses the timing curve for blur, fade, and orbital slide.',
-  'focus duration ms': 'Sets the zoom-in and zoom-out duration for cell editing.',
-  'focus blur px': 'Sets the peak blur during the focused editing camera move.',
+  'focused scene transition': 'Slides focused content along the microscope orbital track; turn off to keep the original zoom.',
+  'focus duration ms': 'Sets the forward and reverse focused-editor transition duration.',
+  'focus blur px': 'Sets the peak scene blur while the fixed microscope optics remain sharp.',
+  'focus arc depth': 'Moves the focused-scene circular track centroid below the viewport.',
   'focus coverage': 'Sets how much of the microscope circle the focused cell occupies.',
   'focus easing': 'Chooses the focused editing camera timing curve.',
   'Add seed': 'Immediately creates one valid auto-growth seed for auditing.',
@@ -672,6 +674,9 @@ export function ControlPanel({
     })
 
     const editFocus = pane.addFolder({ title: 'Focused text editing', expanded: false })
+    editFocus.addBinding(params.editFocus, 'trackTransitionEnabled', {
+      label: 'focused scene transition',
+    })
     editFocus.addBinding(params.editFocus, 'durationMs', {
       label: 'focus duration ms',
       min: 180,
@@ -683,6 +688,12 @@ export function ControlPanel({
       min: 0,
       max: 42,
       step: 1,
+    })
+    editFocus.addBinding(params.editFocus, 'arcDepth', {
+      label: 'focus arc depth',
+      min: 1.2,
+      max: 3,
+      step: 0.1,
     })
     editFocus.addBinding(params.editFocus, 'coverage', {
       label: 'focus coverage',

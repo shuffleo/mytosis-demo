@@ -108,8 +108,10 @@ export interface CanvasSettings {
     easing: 'smooth' | 'spring' | 'linear'
   }
   editFocus: {
+    trackTransitionEnabled: boolean
     durationMs: number
     blurPx: number
+    arcDepth: number
     coverage: number
     easing: 'smooth' | 'spring' | 'linear'
   }
@@ -145,7 +147,7 @@ export interface CanvasSettings {
   }
 }
 
-export const SETTINGS_SCHEMA_VERSION = 9
+export const SETTINGS_SCHEMA_VERSION = 10
 
 export const defaultSettings: CanvasSettings = {
   schemaVersion: SETTINGS_SCHEMA_VERSION,
@@ -257,8 +259,10 @@ export const defaultSettings: CanvasSettings = {
     easing: 'smooth',
   },
   editFocus: {
-    durationMs: 720,
-    blurPx: 18,
+    trackTransitionEnabled: true,
+    durationMs: 1100,
+    blurPx: 24,
+    arcDepth: 1.8,
     coverage: 0.8,
     easing: 'smooth',
   },
@@ -315,7 +319,7 @@ export function groupColorFor(settings: CanvasSettings, order: number) {
 export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasSettings {
   if (
     !input ||
-    ![2, 3, 4, 5, 6, 7, 8, SETTINGS_SCHEMA_VERSION].includes(
+    ![2, 3, 4, 5, 6, 7, 8, 9, SETTINGS_SCHEMA_VERSION].includes(
       input.schemaVersion ?? 0,
     )
   ) {

@@ -187,8 +187,10 @@ interface Snapshot {
       easing: 'smooth' | 'spring' | 'linear'
     }
     editFocus: {
+      trackTransitionEnabled: boolean
       durationMs: number
       blurPx: number
+      arcDepth: number
       coverage: number
       easing: 'smooth' | 'spring' | 'linear'
     }
@@ -217,6 +219,15 @@ interface PostProcessSnapshot {
   wallCompositeMode: 'pre-shader' | 'fallback-overlay'
   pointerEvents: string
   field: { width: number; height: number; center: Point2; radius: number }
+  focusScene: {
+    scale: number
+    translate: Point2
+    orbitAngle: number
+    orbitScale: number
+    orbitOrigin: Point2
+    blurPx: number
+    opacity: number
+  }
 }
 
 async function snapshot(page: Page): Promise<Snapshot> {
@@ -343,7 +354,7 @@ test.beforeEach(async ({ page }) => {
 
 test('uses exact microscope defaults and composites Paper text below sharp UI', async ({ page }) => {
   const state = await snapshot(page)
-  expect(state.settings.schemaVersion).toBe(9)
+  expect(state.settings.schemaVersion).toBe(10)
   expect(state.settings.effects).toEqual({
     circle: {
       grain: 0.04,
@@ -517,6 +528,40 @@ test('exposes live grain and glow controls in the open microscope panel', async 
     },
   )
   expect(wallPixelCount).toBeGreaterThan(50)
+  await page.waitForTimeout(1200)
+  const wallPixelCountAfterDirtyRepaint = await page
+    .getByTestId('wall-texture-canvas')
+    .evaluate((canvas: HTMLCanvasElement) => {
+      const context = canvas.getContext('2d')
+      if (!context) return 0
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
+      let count = 0
+      for (let index = 3; index < pixels.length; index += 64) {
+        if (pixels[index] > 0) count += 1
+      }
+      return count
+    })
+  expect(wallPixelCountAfterDirtyRepaint).toBeGreaterThan(wallPixelCount * 0.5)
+
+  await panel
+    .getByLabel('nutrients enabled')
+    .evaluate((element: HTMLInputElement) => element.click())
+  const lowDetailRenderCount = (await postProcessSnapshot(page)).renderCount
+  await setNumericBinding(page, 'wall grain', 2.2)
+  await setNumericBinding(page, 'grain frequency', 0.006)
+  await setNumericBinding(page, 'grain detail', 1)
+  await expect
+    .poll(async () => (await postProcessSnapshot(page)).renderCount)
+    .toBeGreaterThan(lowDetailRenderCount)
+  const lowDetail = await page.getByTestId('microscope-canvas').screenshot()
+  const highDetailRenderCount = (await postProcessSnapshot(page)).renderCount
+  await setNumericBinding(page, 'grain frequency', 0.075)
+  await setNumericBinding(page, 'grain detail', 4)
+  await expect
+    .poll(async () => (await postProcessSnapshot(page)).renderCount)
+    .toBeGreaterThan(highDetailRenderCount)
+  const highDetail = await page.getByTestId('microscope-canvas').screenshot()
+  expect(lowDetail.equals(highDetail)).toBe(false)
 })
 
 test('zooms a cell into a large integrated editor and restores the microscope', async ({
@@ -524,8 +569,10 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
 }) => {
   await page.getByTestId('settings-toggle').click()
   await page.getByText('Focused text editing', { exact: true }).click()
-  await expect(page.getByLabel('focus duration ms')).toHaveValue('720')
-  await expect(page.getByLabel('focus blur px')).toHaveValue('18')
+  await expect(page.getByLabel('focused scene transition')).toBeChecked()
+  await expect(page.getByLabel('focus duration ms')).toHaveValue('1100')
+  await expect(page.getByLabel('focus blur px')).toHaveValue('24')
+  await expect(page.getByLabel('focus arc depth')).toHaveValue('1.8')
   await expect(page.getByLabel('focus coverage')).toHaveValue('0.80')
   await setNumericBinding(page, 'focus blur px', 22)
   await page.getByTestId('settings-toggle').click()
@@ -535,7 +582,20 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   const editor = page.getByTestId('cell-editor')
   await expect(editor).toBeFocused()
   await expect(page.getByTestId('focus-edit-dismiss')).toBeVisible()
-  await page.waitForTimeout(400)
+  const fixedOpticsBefore = await page.getByTestId('microscope-canvas').evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    return {
+      transform: getComputedStyle(element).transform,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    }
+  })
+  await expect(page.locator('.voronoi-stage')).toHaveAttribute('data-focus-phase', 'entering')
+  await expect
+    .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
+    .toBe('editing')
   const editorStyle = await editor.evaluate((element) => {
     const style = getComputedStyle(element)
     return {
@@ -549,11 +609,33 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   expect(editorStyle.height).toBeGreaterThanOrEqual(170)
   expect(editorStyle.background).toBe('rgba(0, 0, 0, 0)')
   expect(editorStyle.border).toBe('0px')
+  const focusedPostProcess = await postProcessSnapshot(page)
+  expect(focusedPostProcess.focusScene.scale).toBeGreaterThan(1)
+  expect(focusedPostProcess.focusScene.orbitAngle).toBeCloseTo(0, 5)
+  expect(focusedPostProcess.focusScene.opacity).toBeCloseTo(1, 5)
   expect(
-    await page
-      .locator('.microscope-scene')
-      .evaluate((element) => getComputedStyle(element).transform),
-  ).not.toBe('none')
+    await page.getByTestId('microscope-canvas').evaluate((element) => {
+      const bounds = element.getBoundingClientRect()
+      return {
+        transform: getComputedStyle(element).transform,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      }
+    }),
+  ).toEqual(fixedOpticsBefore)
+  const initialEditorHeight = editorStyle.height
+  await editor.fill(
+    Array.from({ length: 18 }, (_, index) => `A responsive focused line ${index + 1}.`).join(
+      '\n',
+    ),
+  )
+  const expandedHeight = await editor.evaluate((element) =>
+    Number.parseFloat(getComputedStyle(element).height),
+  )
+  expect(expandedHeight).toBeGreaterThan(initialEditorHeight)
+  expect(expandedHeight).toBeLessThanOrEqual(620)
   await expect(page.locator('.voronoi-stage')).toHaveCSS('--focus-blur', '22px')
   await expect(page.getByTestId('tool-add')).toHaveCount(0)
   await expect(page.getByTestId('tool-group')).toHaveCount(0)
@@ -561,8 +643,42 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
 
   await page.mouse.click(8, 8)
   await expect(editor).toHaveCount(0)
-  await page.waitForTimeout(780)
+  await expect(page.locator('.voronoi-stage')).toHaveAttribute('data-focus-phase', 'exiting')
+  await expect
+    .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
+    .toBe('idle')
   await expect(page.locator('.microscope-scene')).not.toHaveClass(/is-focus-/)
+  const restored = await postProcessSnapshot(page)
+  expect(restored.focusScene.scale).toBeCloseTo(1, 5)
+  expect(restored.focusScene.orbitAngle).toBeCloseTo(0, 5)
+  expect(restored.focusScene.blurPx).toBeCloseTo(0, 5)
+  expect(restored.focusScene.opacity).toBeCloseTo(1, 5)
+})
+
+test('retains the direct focused-editor zoom when the tracked transition is off', async ({
+  page,
+}) => {
+  await page.getByTestId('settings-toggle').click()
+  await page.getByText('Focused text editing', { exact: true }).click()
+  await page
+    .getByLabel('focused scene transition')
+    .evaluate((element: HTMLInputElement) => element.click())
+  await expect
+    .poll(async () => (await snapshot(page)).settings.editFocus.trackTransitionEnabled)
+    .toBe(false)
+  await page.getByTestId('settings-toggle').click()
+  await page.getByTestId('tool-select').click()
+  const point = await sitePoint(page, 'cell-4')
+  await page.mouse.dblclick(point.x, point.y, { delay: 70 })
+  await page.waitForTimeout(320)
+  const transitioning = await postProcessSnapshot(page)
+  expect(transitioning.focusScene.scale).toBeGreaterThan(1)
+  expect(transitioning.focusScene.orbitAngle).toBe(0)
+  expect(transitioning.focusScene.opacity).toBe(1)
+  await page.getByTestId('cell-editor').press('Escape')
+  await expect
+    .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
+    .toBe('idle')
 })
 
 test('keeps CRT color shift and bulge while phosphor and scanlines are independently off', async ({
@@ -835,7 +951,7 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
   await expect(page.getByLabel('transition enabled')).toBeChecked()
   await expect(page.getByLabel('duration ms', { exact: true })).toHaveValue('900')
   await expect(page.getByLabel('maximum blur')).toHaveValue('14')
-  await expect(page.getByLabel('arc depth')).toHaveValue('1.8')
+  await expect(page.getByLabel('arc depth', { exact: true })).toHaveValue('1.8')
   await page.getByText('Palette', { exact: true }).click()
   await expect(page.getByText('group color 1', { exact: true })).toBeVisible()
   await expect(page.getByText('group color 8', { exact: true })).toBeVisible()

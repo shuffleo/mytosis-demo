@@ -94,12 +94,16 @@ The product is a local-first reflective journal rendered as a living, circular m
 | TXT-08 | Native caret editing | Text editing uses a native textarea with selection, clipboard, IME, and caret behavior. | Implemented |
 | TXT-09 | Double-click focus | Double-clicking a cell enters focused camera editing. | Implemented |
 | TXT-10 | Focus coverage | Selected cell fills approximately 80% of the circular field at center. | Implemented |
-| TXT-11 | Focus blur | Zoom transition spikes blur and rapidly returns to sharpness. Duration, peak, coverage, and easing are adjustable. | Implemented |
-| TXT-12 | Large integrated editor | Textarea is transparent and borderless, approximately 5–12 lines high and 6–12 words wide based on content. | Implemented |
+| TXT-11 | Focus blur | Enter blur rises more slowly to its adjustable peak; exit retraces the same blur and motion states in exact reverse. Defaults are 1100 ms and 24 px. | Implemented 2026-11-10 |
+| TXT-12 | Large integrated editor | Textarea is transparent and borderless, grows responsively with content up to 800 × 620 px / 88 × 82 viewport units, then scrolls. | Implemented 2026-11-10 |
 | TXT-13 | Overflow affordance | Focused editor scrolls when required and fades at top/bottom edges. | Implemented |
 | TXT-14 | Exit editing | Escape cancels; clicking outside the focused cell, including black exterior, commits and exits. | Implemented |
 | TXT-15 | Close cursor | Outside the focused cell, pointer uses an X-close cursor. | Implemented |
 | TXT-16 | Focus toolbar | Hide Add Cell, Group, and Merge/Split while focused editing is active. | Implemented |
+| TXT-17 | Fixed optics | Shader, noise, vignette, circular clip, and border remain fixed while scene content alone moves beneath them. | Implemented 2026-11-10 |
+| TXT-18 | Tracked focus scene | A visible feature flag slides a new focused scene along the microscope/list circular track, with arc depth defaulting to 1.8. | Implemented 2026-11-10 |
+| TXT-19 | Legacy focus path | Turning tracked focus off retains the prior direct zoom behavior. | Implemented 2026-11-10 |
+| TXT-20 | Synchronized exit | Scene, vignette, and border finish together without bottom-right exposure, duplicate vectors, or settling jitter. | Implemented 2026-11-10 |
 
 ## 6. Auto-growth seeds and incubation
 
@@ -222,7 +226,7 @@ The product is a local-first reflective journal rendered as a living, circular m
 | FX-07 | Pointer inverse mapping | Pointer input maps through radial lens/CRT distortion back to Paper coordinates. | Implemented |
 | FX-08 | Fallback | If WebGL2 fails, Paper remains usable and effect controls report unavailable. | Implemented |
 | FX-09 | Sharp UI | Toolbar, panel, and focused native editor remain outside microscope processing. | Implemented |
-| FX-10 | Pencil walls | Cell walls, group walls, and outer circle receive stable turbulence/displacement grain. | Implemented |
+| FX-10 | Pencil walls | Cell and group walls receive stable turbulence/displacement grain; no duplicate outer-circle texture stroke is drawn. | Implemented 2026-11-10 |
 | FX-11 | Wall controls | Enable, displacement, frequency, octave detail, and opacity are editable. | Implemented |
 | FX-12 | No live overlay drift | Wall source is transparent and hidden in live WebGL mode; it is composed with Paper before optical shaders. | Implemented 2026-11-10 |
 | FX-13 | Fallback SVG | Actual SVG `feTurbulence` + `feDisplacementMap` remains available for the no-WebGL overlay fallback. | Implemented 2026-11-10 |
@@ -230,7 +234,7 @@ The product is a local-first reflective journal rendered as a living, circular m
 | FX-15 | Seam nutrients | Deterministic dark dim-gray dots orbit cell perimeter normals within seams at roughly one-tenth reference speed. | Implemented |
 | FX-16 | Particle default | Default is 64 particles per cell; control supports 0–128. | Implemented 2026-11-10 |
 | FX-17 | Particle ordering | Nutrients are composed before vignette, lens, CRT, and whole-circle output. | Implemented 2026-11-10 |
-| FX-18 | Dirty-region particle work | Cache static walls and restore/repaint only padded particle dirty bounds. | Implemented |
+| FX-18 | Dirty-region particle work | Cache static walls and restore/repaint only padded particle dirty bounds without clearing/cropping untouched texture regions. | Implemented 2026-11-10 |
 | FX-19 | Texture reuse | Reuse WebGL textures with `texSubImage2D`; avoid reallocating unless dimensions change. | Implemented |
 | FX-20 | Settled uploads | Static scenes stop uploading; enabled nutrients intentionally keep their pre-shader texture moving. | Implemented |
 

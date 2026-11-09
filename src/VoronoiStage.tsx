@@ -18,6 +18,7 @@ import {
 } from './voronoi-engine'
 import {
   MicroscopePostProcessor,
+  type FocusSceneState,
   type PostProcessDebugSnapshot,
   type PostProcessStatus,
 } from './microscope-postprocess'
@@ -45,6 +46,24 @@ interface EditingState {
   value: string
   originalValue: string
   ghostPrompt: string
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
+function smoothStep(value: number) {
+  const bounded = clamp(value, 0, 1)
+  return bounded * bounded * (3 - 2 * bounded)
+}
+
+function focusEasing(value: number, easing: CanvasSettings['editFocus']['easing']) {
+  const bounded = clamp(value, 0, 1)
+  if (easing === 'linear') return bounded
+  if (easing === 'spring') {
+    return clamp(1 - Math.cos(bounded * Math.PI * 0.5) * Math.exp(-bounded * 4.2), 0, 1)
+  }
+  return smoothStep(bounded)
 }
 
 interface VoronoiStageProps {
@@ -87,6 +106,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   onEditingChanged,
 }, forwardedRef) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const sourceSceneRef = useRef<HTMLDivElement>(null)
   const postProcessCanvasRef = useRef<HTMLCanvasElement>(null)
   const wallTextureCanvasRef = useRef<HTMLCanvasElement>(null)
   const editorRef = useRef<HTMLTextAreaElement>(null)
@@ -100,14 +120,42 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const editingRef = useRef<EditingState | null>(null)
   const [editing, setEditing] = useState<EditingState | null>(null)
   const [focusExiting, setFocusExiting] = useState(false)
+  const [focusPhase, setFocusPhase] = useState<
+    'idle' | 'entering' | 'editing' | 'exiting'
+  >('idle')
   const [focusLayout, setFocusLayout] = useState<EditorLayout | null>(null)
   const [fieldBounds, setFieldBounds] = useState(() => ({
     center: { x: 0, y: 0 },
     radius: 1,
   }))
-  const focusExitTimerRef = useRef<number | null>(null)
+  const focusAnimationFrameRef = useRef<number | null>(null)
+  const focusProgressRef = useRef(0)
   const [selection, setSelection] = useState<string | null>(null)
   const previousSeedAuditRequestRef = useRef(seedAuditRequest)
+
+  const resizeEditorToContent = (editor: HTMLTextAreaElement, value: string) => {
+    const words = Math.max(1, value.trim().split(/\s+/).filter(Boolean).length)
+    const fieldDiameter = fieldBoundsRef.current.radius * 2
+    const maximumWidth = Math.max(
+      320,
+      Math.min(800, window.innerWidth * 0.88, fieldDiameter * 0.78),
+    )
+    const desiredWidth = 250 + Math.min(16, Math.max(6, words)) * 31
+    editor.style.width = `${clamp(desiredWidth, 300, maximumWidth)}px`
+    const maximumHeight = Math.max(
+      190,
+      Math.min(620, window.innerHeight * 0.82, fieldDiameter * 0.82),
+    )
+    const explicitLines = value.split('\n').length
+    const estimatedLines = Math.max(explicitLines, Math.ceil(words / 10), 5)
+    editor.style.height = 'auto'
+    const measuredHeight = editor.scrollHeight
+    editor.style.height = `${clamp(
+      Math.max(estimatedLines * 34, measuredHeight),
+      170,
+      maximumHeight,
+    )}px`
+  }
 
   const positionEditor = (layout: EditorLayout) => {
     latestLayoutRef.current = layout
@@ -126,16 +174,12 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     )
     const editor = editorRef.current
     if (!editor) return
-    const words = Math.max(1, layout.text.trim().split(/\s+/).filter(Boolean).length)
-    const width = Math.max(300, Math.min(660, 250 + Math.min(12, Math.max(6, words)) * 28))
-    const estimatedLines = Math.max(
-      5,
-      Math.min(12, Math.max(layout.text.split('\n').length, Math.ceil(words / 9))),
-    )
     editor.style.left = `${fieldBoundsRef.current.center.x}px`
     editor.style.top = `${fieldBoundsRef.current.center.y}px`
-    editor.style.width = `${width}px`
-    editor.style.height = `${Math.max(170, Math.min(390, estimatedLines * 31))}px`
+    resizeEditorToContent(
+      editor,
+      editingRef.current ? editor.value : layout.text,
+    )
   }
 
   useEffect(() => {
@@ -323,25 +367,6 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     onEditingChanged?.(Boolean(editing))
   }, [editing, onEditingChanged])
 
-  useEffect(
-    () => () => {
-      if (focusExitTimerRef.current !== null) {
-        window.clearTimeout(focusExitTimerRef.current)
-      }
-    },
-    [],
-  )
-
-  const beginFocusExit = () => {
-    setFocusExiting(true)
-    if (focusExitTimerRef.current !== null) window.clearTimeout(focusExitTimerRef.current)
-    focusExitTimerRef.current = window.setTimeout(() => {
-      setFocusExiting(false)
-      setFocusLayout(null)
-      focusExitTimerRef.current = null
-    }, settingsRef.current.editFocus.durationMs)
-  }
-
   const finishEditingWithTransition = (kind: 'commit' | 'cancel') => {
     const active = editingRef.current
     if (!active) return
@@ -352,7 +377,8 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     }
     editingRef.current = null
     setEditing(null)
-    beginFocusExit()
+    setFocusExiting(true)
+    setFocusPhase('exiting')
     canvasRef.current?.focus({ preventScroll: true })
   }
 
@@ -444,10 +470,144 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     '--field-radius': `${fieldBounds.radius}px`,
   } as CSSProperties
 
+  const applyFocusVisual = (progress: number) => {
+    const bounded = clamp(progress, 0, 1)
+    const focusSettings = settingsRef.current.editFocus
+    const orbitOrigin = {
+      x: window.innerWidth / 2,
+      y: window.innerHeight * focusSettings.arcDepth,
+    }
+    let scene: FocusSceneState
+    if (focusSettings.trackTransitionEnabled) {
+      if (bounded <= 0.5) {
+        const phase = bounded * 2
+        scene = {
+          scale: 1,
+          translate: { x: 0, y: 0 },
+          orbitAngle: (-22 * phase * Math.PI) / 180,
+          orbitScale: 1 - phase * 0.1,
+          orbitOrigin,
+          blurPx: focusSettings.blurPx * phase,
+          opacity: 1 - smoothStep(phase),
+        }
+      } else {
+        const phase = (bounded - 0.5) * 2
+        scene = {
+          scale: focusScale,
+          translate: { x: focusTranslateX, y: focusTranslateY },
+          orbitAngle: (22 * (1 - phase) * Math.PI) / 180,
+          orbitScale: 0.9 + phase * 0.1,
+          orbitOrigin,
+          blurPx: focusSettings.blurPx * (1 - phase),
+          opacity: smoothStep(phase),
+        }
+      }
+    } else {
+      scene = {
+        scale: 1 + (focusScale - 1) * bounded,
+        translate: {
+          x: focusTranslateX * bounded,
+          y: focusTranslateY * bounded,
+        },
+        orbitAngle: 0,
+        orbitScale: 1,
+        orbitOrigin,
+        blurPx: Math.sin(Math.PI * bounded) * focusSettings.blurPx,
+        opacity: 1,
+      }
+    }
+    postProcessorRef.current?.setFocusScene(scene)
+    const sourceScene = sourceSceneRef.current
+    if (sourceScene) {
+      const matrix = new DOMMatrix()
+        .translate(scene.orbitOrigin.x, scene.orbitOrigin.y)
+        .rotate((scene.orbitAngle * 180) / Math.PI)
+        .scale(scene.orbitScale)
+        .translate(-scene.orbitOrigin.x, -scene.orbitOrigin.y)
+        .translate(scene.translate.x, scene.translate.y)
+        .scale(scene.scale)
+      sourceScene.style.transform = matrix.toString()
+      sourceScene.style.filter = `blur(${scene.blurPx}px)`
+      sourceScene.style.opacity = String(scene.opacity)
+    }
+  }
+
+  const animateFocusTo = (target: 0 | 1, onComplete?: () => void) => {
+    if (focusAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(focusAnimationFrameRef.current)
+    }
+    const startProgress = focusProgressRef.current
+    const distanceToTarget = Math.abs(target - startProgress)
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const duration = reducedMotion
+      ? 120
+      : Math.max(120, settingsRef.current.editFocus.durationMs * distanceToTarget)
+    const startedAt = performance.now()
+    const frame = (now: number) => {
+      const elapsed = clamp((now - startedAt) / duration, 0, 1)
+      let progress: number
+      if (startProgress === 0 && target === 1) {
+        progress = focusEasing(elapsed, settingsRef.current.editFocus.easing)
+      } else if (startProgress === 1 && target === 0) {
+        progress = focusEasing(1 - elapsed, settingsRef.current.editFocus.easing)
+      } else {
+        const eased = focusEasing(elapsed, settingsRef.current.editFocus.easing)
+        progress = startProgress + (target - startProgress) * eased
+      }
+      focusProgressRef.current = progress
+      applyFocusVisual(progress)
+      if (elapsed < 1) {
+        focusAnimationFrameRef.current = window.requestAnimationFrame(frame)
+        return
+      }
+      focusAnimationFrameRef.current = null
+      focusProgressRef.current = target
+      applyFocusVisual(target)
+      onComplete?.()
+    }
+    focusAnimationFrameRef.current = window.requestAnimationFrame(frame)
+  }
+
+  useEffect(() => {
+    if (!editing || !focusLayout || focusProgressRef.current >= 1) return
+    setFocusExiting(false)
+    setFocusPhase('entering')
+    animateFocusTo(1, () => setFocusPhase('editing'))
+    // Enter once per editing session after its geometry is available.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing?.id, focusLayout !== null])
+
+  useEffect(() => {
+    if (!focusExiting) return
+    animateFocusTo(0, () => {
+      setFocusExiting(false)
+      setFocusLayout(null)
+      setFocusPhase('idle')
+    })
+    // Exit is the exact inverse timeline of entry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusExiting])
+
+  useEffect(() => {
+    if (focusProgressRef.current > 0) applyFocusVisual(focusProgressRef.current)
+    // Keep live sidebar edits synchronized with the active transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings])
+
+  useEffect(
+    () => () => {
+      if (focusAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(focusAnimationFrameRef.current)
+      }
+    },
+    [],
+  )
+
   return (
     <main
       className={`voronoi-stage ${suspended ? 'is-suspended' : ''}`}
       aria-hidden={suspended}
+      data-focus-phase={focusPhase}
       style={focusStyle}
     >
       <svg className="wall-filter-defs" aria-hidden="true" width="0" height="0">
@@ -486,25 +646,27 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
         <div
           className={`microscope-scene ${editing ? 'is-focus-editing' : ''} ${focusExiting ? 'is-focus-exiting' : ''}`}
         >
-          <canvas
-            ref={canvasRef}
-            className="voronoi-canvas"
-            data-testid="voronoi-canvas"
-            tabIndex={blocked || suspended ? -1 : 0}
-            role="application"
-            aria-label="Interactive journal cell canvas"
-            onKeyDown={handleCanvasKeyDown}
-          />
+          <div ref={sourceSceneRef} className="microscope-source-scene">
+            <canvas
+              ref={canvasRef}
+              className="voronoi-canvas"
+              data-testid="voronoi-canvas"
+              tabIndex={blocked || suspended ? -1 : 0}
+              role="application"
+              aria-label="Interactive journal cell canvas"
+              onKeyDown={handleCanvasKeyDown}
+            />
+            <canvas
+              ref={wallTextureCanvasRef}
+              className="wall-texture-canvas"
+              data-testid="wall-texture-canvas"
+              aria-hidden="true"
+            />
+          </div>
           <canvas
             ref={postProcessCanvasRef}
             className="microscope-canvas"
             data-testid="microscope-canvas"
-            aria-hidden="true"
-          />
-          <canvas
-            ref={wallTextureCanvasRef}
-            className="wall-texture-canvas"
-            data-testid="wall-texture-canvas"
             aria-hidden="true"
           />
         </div>
@@ -539,16 +701,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
             spellCheck
             onInput={(event) => {
               const value = event.currentTarget.value
-              const words = Math.max(1, value.trim().split(/\s+/).filter(Boolean).length)
-              const lines = Math.max(
-                5,
-                Math.min(12, Math.max(value.split('\n').length, Math.ceil(words / 9))),
-              )
-              event.currentTarget.style.width = `${Math.max(
-                300,
-                Math.min(660, 250 + Math.min(12, Math.max(6, words)) * 28),
-              )}px`
-              event.currentTarget.style.height = `${Math.max(170, Math.min(390, lines * 31))}px`
+              resizeEditorToContent(event.currentTarget, value)
             }}
             onKeyDown={handleEditorKeyDown}
             onPointerDown={stopEditorPointer}

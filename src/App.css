@@ -95,7 +95,8 @@
 }
 
 .microscope-viewport-mask,
-.microscope-scene {
+.microscope-scene,
+.microscope-source-scene {
   position: absolute;
   inset: 0;
 }
@@ -105,27 +106,12 @@
 }
 
 .microscope-scene {
+  isolation: isolate;
+}
+
+.microscope-source-scene {
   transform-origin: 0 0;
-  transition:
-    transform var(--focus-duration) var(--focus-ease),
-    filter var(--focus-duration) var(--focus-ease);
-  will-change: transform, filter;
-}
-
-.microscope-scene.is-focus-editing {
-  transform: translate(var(--focus-x), var(--focus-y)) scale(var(--focus-scale));
-  animation: focus-blur-pulse var(--focus-duration) var(--focus-ease) both;
-}
-
-.microscope-scene.is-focus-exiting {
-  pointer-events: none;
-  transform: translate(0, 0) scale(1);
-  animation: focus-blur-pulse var(--focus-duration) var(--focus-ease) reverse both;
-}
-
-@keyframes focus-blur-pulse {
-  0%, 100% { filter: blur(0); }
-  28% { filter: blur(var(--focus-blur)); }
+  will-change: transform, filter, opacity;
 }
 
 .voronoi-canvas {
@@ -187,8 +173,8 @@
   z-index: 44;
   min-width: 300px;
   min-height: 170px;
-  max-width: min(660px, 82vw);
-  max-height: min(390px, 70vh);
+  max-width: min(800px, 88vw);
+  max-height: min(620px, 82vh);
   margin: 0;
   padding: 24px 28px;
   overflow: auto;
@@ -698,13 +684,6 @@
 
   .view-transition-curtain {
     animation-duration: 120ms !important;
-  }
-
-  .microscope-scene,
-  .microscope-scene.is-focus-editing,
-  .microscope-scene.is-focus-exiting {
-    animation: none;
-    transition-duration: 120ms;
   }
 
   .tool-button,

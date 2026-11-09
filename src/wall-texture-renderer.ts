@@ -161,23 +161,13 @@ export class WallTextureRenderer {
           Math.max(1, this.settings.group.wallThickness),
         )
       }
-      context.beginPath()
-      context.arc(
-        snapshot.field.center.x,
-        snapshot.field.center.y,
-        snapshot.field.radius - Math.max(1, this.settings.geometry.innerStrokeWidth / 2),
-        0,
-        Math.PI * 2,
-      )
-      context.strokeStyle = this.settings.palette.innerStroke
-      context.lineWidth = Math.max(1, this.settings.geometry.innerStrokeWidth)
-      context.stroke()
       context.globalAlpha = 1
     }
     context.restore()
     this.context.save()
     this.context.setTransform(1, 0, 0, 1, 0, 0)
-    this.context.globalCompositeOperation = 'copy'
+    this.context.clearRect(0, 0, this.output.width, this.output.height)
+    this.context.globalCompositeOperation = 'source-over'
     this.context.drawImage(this.staticLayer, 0, 0)
     this.context.restore()
     return true
@@ -310,7 +300,13 @@ export class WallTextureRenderer {
     if (!width || !height) return staticChanged
     this.context.save()
     this.context.setTransform(1, 0, 0, 1, 0, 0)
-    this.context.globalCompositeOperation = 'copy'
+    this.context.clearRect(
+      left * this.dpr,
+      top * this.dpr,
+      width * this.dpr,
+      height * this.dpr,
+    )
+    this.context.globalCompositeOperation = 'source-over'
     this.context.drawImage(
       this.staticLayer,
       left * this.dpr,
