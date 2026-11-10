@@ -2,10 +2,15 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { runLocalClustering } from './clustering-client'
 import type { ClusteringProgress } from './clustering'
 import { ControlPanel } from './ControlPanel'
+import { DateRail } from './DateRail'
+import { createJournalStore } from './journal-store'
 import { ListEditor } from './ListEditor'
 import { prepareListDocumentForMicroscope } from './list-model'
+import { toLocalDayKey, type DayKey } from './local-day'
 import type { PostProcessStatus } from './microscope-postprocess'
 import {
+  createDefaultDocument,
+  createEmptyDocument,
   deserializeDocument,
   serializeDocument,
   type VoronoiDocument,
@@ -143,28 +148,59 @@ function abortableDelay(milliseconds: number, signal: AbortSignal) {
 }
 
 function App() {
+  const [journalSession] = useState(() => {
+    const store = createJournalStore()
+    const today = new Date()
+    const dayKey = toLocalDayKey(today)
+    const document = store.loadPage(dayKey) ?? createDefaultDocument()
+    if (!store.getSharedPalette()) store.setSharedPalette(document.settings.palette)
+    if (!store.hasPage(dayKey)) store.savePage(dayKey, document)
+    return { store, today, dayKey, document }
+  })
   const stageRef = useRef<VoronoiStageHandle>(null)
   const clusterAbortRef = useRef<AbortController | null>(null)
   const panelBeforeClusterRef = useRef(false)
   const [mode, setMode] = useState<CanvasMode>('add')
   const [focusedEditing, setFocusedEditing] = useState(false)
-  const [view, setView] = useState<'microscope' | 'list'>('microscope')
-  const [listDocument, setListDocument] = useState<VoronoiDocument | null>(null)
+  const [view, setView] = useState<'microscope' | 'list'>(() =>
+    new URLSearchParams(window.location.search).get('view') === 'microscope'
+      ? 'microscope'
+      : 'list',
+  )
+  const [selectedDayKey, setSelectedDayKey] = useState<DayKey>(journalSession.dayKey)
+  const [listDocument, setListDocument] = useState<VoronoiDocument | null>(() =>
+    deserializeDocument(serializeDocument(journalSession.document)),
+  )
+  const [listDirty, setListDirty] = useState(false)
+  const [contentDayKeys, setContentDayKeys] = useState(
+    () => journalSession.store.contentDayKeys(),
+  )
   const [autoGrowth, setAutoGrowth] = useState(false)
   const [panelOpen, setPanelOpen] = useState(false)
   const [seedAuditRequest, setSeedAuditRequest] = useState(0)
-  const [historyRequest, setHistoryRequest] = useState<{
-    kind: 'undo' | 'redo'
-    nonce: number
-  } | null>(null)
   const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false })
   const [postProcessingStatus, setPostProcessingStatus] = useState<
     PostProcessStatus | 'checking'
   >('checking')
-  const [settings, setSettings] = useState(() => cloneSettings(defaultSettings))
+  const [settings, setSettings] = useState(() =>
+    cloneSettings(journalSession.document.settings ?? defaultSettings),
+  )
+  const selectedDayKeyRef = useRef(selectedDayKey)
+  const listDocumentRef = useRef(listDocument)
+  const viewRef = useRef(view)
+  const settingsRef = useRef(settings)
+  const lastSavedRef = useRef(
+    new Map<DayKey, string>([
+      [journalSession.dayKey, serializeDocument(journalSession.document)],
+    ]),
+  )
   const [viewTransition, setViewTransition] = useState<
     'microscope-out' | 'list-in' | 'list-out' | 'microscope-in' | null
   >(null)
+  const [dateTransition, setDateTransition] = useState<{
+    phase: 'out' | 'in'
+    direction: 'forward' | 'backward'
+  } | null>(null)
   const transitionTimersRef = useRef<number[]>([])
   const [clustering, setClustering] = useState<{
     phase: 'processing' | 'settling'
@@ -172,24 +208,181 @@ function App() {
     message: string
   } | null>(null)
   const clusteringActive = clustering !== null
-  const transitionActive = viewTransition !== null
+  const transitionActive = viewTransition !== null || dateTransition !== null
   const handleHistoryChanged = useCallback((canUndo: boolean, canRedo: boolean) => {
     setHistoryState({ canUndo, canRedo })
   }, [])
+  const refreshContentDays = useCallback(() => {
+    const next = journalSession.store.contentDayKeys()
+    setContentDayKeys((current) => {
+      if (
+        current.size === next.size &&
+        [...current].every((dayKey) => next.has(dayKey))
+      ) {
+        return current
+      }
+      return next
+    })
+  }, [journalSession])
+  const persistDocument = useCallback(
+    (dayKey: DayKey, document: VoronoiDocument) => {
+      const serialized = serializeDocument(document)
+      if (lastSavedRef.current.get(dayKey) === serialized) return
+      journalSession.store.savePage(dayKey, document)
+      lastSavedRef.current.set(dayKey, serialized)
+      refreshContentDays()
+    },
+    [journalSession, refreshContentDays],
+  )
   const updateSettings = (next: typeof settings) => {
+    if (
+      JSON.stringify(settingsRef.current.palette) !== JSON.stringify(next.palette)
+    ) {
+      journalSession.store.setSharedPalette(next.palette)
+    }
     setSettings(next)
+    settingsRef.current = next
+    setListDocument((current) =>
+      current ? { ...current, settings: cloneSettings(next) } : current,
+    )
     if ((!next.mergeSplit.enabled || next.mergeSplit.newSelect) && mode === 'merge') {
       setMode('select')
     }
   }
-  const requestHistory = (kind: 'undo' | 'redo') =>
-    setHistoryRequest((current) => ({ kind, nonce: (current?.nonce ?? 0) + 1 }))
+  const requestHistory = (kind: 'undo' | 'redo') => {
+    const serialized =
+      kind === 'undo' ? stageRef.current?.undo() : stageRef.current?.redo()
+    if (!serialized) return
+    const document = deserializeDocument(serialized)
+    setListDocument(document)
+    setListDirty(false)
+    persistDocument(selectedDayKeyRef.current, document)
+  }
   const commitListDocument = (document: VoronoiDocument, command: string) => {
     const serialized = serializeDocument(document)
+    const before = stageRef.current?.serialize()
+    if (before === serialized) {
+      setListDirty(false)
+      persistDocument(selectedDayKeyRef.current, document)
+      return
+    }
     stageRef.current?.replaceDocument(serialized, command)
     const current = stageRef.current?.serialize()
-    if (current) setListDocument(deserializeDocument(current))
+    if (current) {
+      const canonical = deserializeDocument(current)
+      setListDocument(canonical)
+      setListDirty(false)
+      persistDocument(selectedDayKeyRef.current, canonical)
+    }
   }
+  const selectDay = (nextDayKey: DayKey) => {
+    if (nextDayKey === selectedDayKeyRef.current || transitionActive) return
+    const previousDayKey = selectedDayKeyRef.current
+    const currentDocument =
+      viewRef.current === 'list'
+        ? listDocumentRef.current
+        : (() => {
+            const serialized = stageRef.current?.serialize()
+            return serialized ? deserializeDocument(serialized) : null
+          })()
+    if (currentDocument) {
+      persistDocument(selectedDayKeyRef.current, currentDocument)
+    }
+    const applyNextDay = () => {
+      const nextDocument =
+        journalSession.store.loadPage(nextDayKey) ?? createEmptyDocument()
+      if (!journalSession.store.hasPage(nextDayKey)) {
+        nextDocument.settings = cloneSettings(settingsRef.current)
+        nextDocument.layout.settingsVersion = nextDocument.settings.schemaVersion
+      }
+      nextDocument.settings.palette = structuredClone(
+        journalSession.store.getSharedPalette() ?? settingsRef.current.palette,
+      )
+      const serialized = serializeDocument(nextDocument)
+      lastSavedRef.current.set(nextDayKey, serialized)
+      selectedDayKeyRef.current = nextDayKey
+      setSelectedDayKey(nextDayKey)
+      setSettings(cloneSettings(nextDocument.settings))
+      settingsRef.current = nextDocument.settings
+      setListDocument(deserializeDocument(serialized))
+      setListDirty(false)
+      setHistoryState({ canUndo: false, canRedo: false })
+      stageRef.current?.loadDocument(serialized)
+    }
+    if (
+      !settingsRef.current.viewTransition.enabled ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      applyNextDay()
+      return
+    }
+    const direction = nextDayKey > previousDayKey ? 'forward' : 'backward'
+    const duration = Math.max(240, settingsRef.current.viewTransition.durationMs)
+    setDateTransition({ phase: 'out', direction })
+    const midpointTimer = window.setTimeout(() => {
+      applyNextDay()
+      setDateTransition({ phase: 'in', direction })
+    }, duration / 2)
+    const endTimer = window.setTimeout(() => setDateTransition(null), duration)
+    transitionTimersRef.current = [midpointTimer, endTimer]
+  }
+  const startAnew = () => {
+    if (
+      !window.confirm(
+        'Erase every saved journal page on this device and restore the starter journal?',
+      )
+    ) {
+      return
+    }
+    clusterAbortRef.current?.abort()
+    journalSession.store.clearAll()
+    const nextDayKey = toLocalDayKey(new Date())
+    const nextDocument = createDefaultDocument()
+    const serialized = serializeDocument(nextDocument)
+    journalSession.store.savePage(nextDayKey, nextDocument)
+    journalSession.store.setSharedPalette(nextDocument.settings.palette)
+    lastSavedRef.current.clear()
+    lastSavedRef.current.set(nextDayKey, serialized)
+    selectedDayKeyRef.current = nextDayKey
+    listDocumentRef.current = deserializeDocument(serialized)
+    settingsRef.current = cloneSettings(nextDocument.settings)
+    setSelectedDayKey(nextDayKey)
+    setListDocument(deserializeDocument(serialized))
+    setListDirty(false)
+    setSettings(cloneSettings(nextDocument.settings))
+    setContentDayKeys(journalSession.store.contentDayKeys())
+    setHistoryState({ canUndo: false, canRedo: false })
+    setMode('add')
+    setFocusedEditing(false)
+    setPanelOpen(false)
+    setView('list')
+    stageRef.current?.loadDocument(serialized)
+  }
+  useEffect(() => {
+    selectedDayKeyRef.current = selectedDayKey
+    listDocumentRef.current = listDocument
+    viewRef.current = view
+    settingsRef.current = settings
+  }, [listDocument, selectedDayKey, settings, view])
+  useEffect(() => {
+    const saveCurrentPage = () => {
+      const document =
+        viewRef.current === 'list'
+          ? listDocumentRef.current
+          : (() => {
+              const serialized = stageRef.current?.serialize()
+              return serialized ? deserializeDocument(serialized) : null
+            })()
+      if (document) persistDocument(selectedDayKeyRef.current, document)
+    }
+    const interval = window.setInterval(saveCurrentPage, 500)
+    window.addEventListener('beforeunload', saveCurrentPage)
+    return () => {
+      saveCurrentPage()
+      window.clearInterval(interval)
+      window.removeEventListener('beforeunload', saveCurrentPage)
+    }
+  }, [persistDocument])
   useEffect(
     () => () => {
       for (const timer of transitionTimersRef.current) window.clearTimeout(timer)
@@ -201,7 +394,10 @@ function App() {
     atMidpoint: () => void,
   ) => {
     if (transitionActive) return
-    if (!settings.viewTransition.enabled) {
+    if (
+      !settings.viewTransition.enabled ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
       atMidpoint()
       setView(target)
       return
@@ -338,30 +534,48 @@ function App() {
 
   return (
     <div
-      className={`app-shell ${viewTransition ? `view-transition-${viewTransition}` : ''}`}
+      className={`app-shell ${viewTransition ? `view-transition-${viewTransition}` : ''} ${
+        dateTransition
+          ? `date-transition-${dateTransition.direction}-${dateTransition.phase}`
+          : ''
+      }`}
       style={{ background: settings.palette.exterior, ...transitionStyle }}
     >
       <VoronoiStage
         ref={stageRef}
+        initialDocument={serializeDocument(journalSession.document)}
         mode={mode}
         settings={settings}
         autoGrowth={autoGrowth}
         seedAuditRequest={seedAuditRequest}
-        historyRequest={historyRequest}
+        historyRequest={null}
         blocked={clusteringActive || transitionActive}
         suspended={view === 'list'}
         clusteringWave={clusteringActive}
         onPostProcessingStatus={setPostProcessingStatus}
         onHistoryChanged={handleHistoryChanged}
         onEditingChanged={setFocusedEditing}
+        onModeChanged={setMode}
       />
       {view === 'list' && listDocument && (
         <ListEditor
           document={listDocument}
-          onChange={setListDocument}
+          onChange={(document) => {
+            setListDocument(document)
+            setListDirty(true)
+          }}
           onCommit={commitListDocument}
         />
       )}
+      <div className="journal-date-rail">
+        <DateRail
+          selectedDayKey={selectedDayKey}
+          onSelectDay={selectDay}
+          contentDayKeys={contentDayKeys}
+          theme={view}
+          disabled={clusteringActive || transitionActive}
+        />
+      </div>
       <nav aria-label={view === 'list' ? 'Return to microscope' : 'Canvas controls'}>
         <div
           className={`tool-dock ${view === 'list' ? 'list-only-dock' : ''}`}
@@ -369,18 +583,45 @@ function App() {
           aria-label={view === 'list' ? 'List view controls' : 'Canvas tools'}
         >
           {view === 'list' ? (
-            <button
-              className="tool-button return-microscope-button is-active"
-              data-testid="return-microscope"
-              type="button"
-              aria-label="Return to microscope view"
-              data-tooltip="Return to microscope"
-              title="Return to microscope"
-              disabled={transitionActive}
-              onClick={closeListView}
-            >
-              <ListViewIcon returning />
-            </button>
+            <>
+              <div className="history-toolbar" role="group" aria-label="Journal history">
+                <button
+                  className="icon-tool-button"
+                  data-testid="history-undo"
+                  type="button"
+                  aria-label="Undo"
+                  title="Undo (⌘/Ctrl-Z)"
+                  disabled={(!historyState.canUndo && !listDirty) || transitionActive}
+                  onClick={() => requestHistory('undo')}
+                >
+                  <UndoIcon />
+                </button>
+                <button
+                  className="icon-tool-button"
+                  data-testid="history-redo"
+                  type="button"
+                  aria-label="Redo"
+                  title="Redo (Shift-⌘/Ctrl-Z)"
+                  disabled={!historyState.canRedo || listDirty || transitionActive}
+                  onClick={() => requestHistory('redo')}
+                >
+                  <RedoIcon />
+                </button>
+              </div>
+              <span className="toolbar-divider" aria-hidden="true" />
+              <button
+                className="tool-button return-microscope-button is-active"
+                data-testid="return-microscope"
+                type="button"
+                aria-label="Return to microscope view"
+                data-tooltip="Return to microscope"
+                title="Return to microscope"
+                disabled={transitionActive}
+                onClick={closeListView}
+              >
+                <ListViewIcon returning />
+              </button>
+            </>
           ) : (
             <>
               <div className="history-toolbar" role="group" aria-label="Canvas history">
@@ -506,6 +747,7 @@ function App() {
             onChange={updateSettings}
             onAddSeed={() => setSeedAuditRequest((request) => request + 1)}
             onDieSeed={() => stageRef.current?.dieFirstSeed()}
+            onStartAnew={startAnew}
           />
         </aside>
       )}

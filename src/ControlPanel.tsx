@@ -1,7 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { Pane } from 'tweakpane'
 import type { PostProcessStatus } from './microscope-postprocess'
-import { cloneSettings, type CanvasSettings } from './settings'
+import {
+  cloneSettings,
+  identifyPalettePreset,
+  palettePresetById,
+  PALETTE_PRESETS,
+  type CanvasSettings,
+  type PalettePresetId,
+} from './settings'
 
 const CONTROL_HINTS: Record<string, string> = {
   'Canvas configuration': 'Live controls for field geometry, motion, growth, groups, effects, and color.',
@@ -9,11 +16,13 @@ const CONTROL_HINTS: Record<string, string> = {
   'Microscope effects — unavailable': 'WebGL2 is unavailable, so the Paper.js fallback stays active.',
   'Whole circle texture': 'Static texture applied uniformly across the circular field.',
   'Microscope vignette': 'Optical blur, dimming, distortion, and grain concentrated at the rim.',
+  profile: 'Chooses independent regular-view or focused-editing vignette settings.',
   'Lens shader': 'Centered spherical refraction locked to the field radius.',
   'CRT shader': 'Optional display-era color, curvature, phosphor, and scanline effects.',
   Geometry: 'Cell-wall spacing, rounding, texture, and safe text inset.',
   'Seam nutrients': 'Slow Bakemono-inspired particles orbit just outside cell edges inside seams.',
   'Hover & morph': 'Timing and response of geometry-only breathing and path interpolation.',
+  'Ambient culture motion': 'Subtle render-only cell breathing that never changes saved geometry.',
   'Auto-growth seeds': 'Controls emergent seed creation, incubation, sticky blobs, and expiry.',
   Groups: 'Hierarchical group walls, tint, attraction, attach, detach, and settling.',
   Autogroup: 'Focused controls for deterministic local TF-IDF clustering.',
@@ -21,6 +30,7 @@ const CONTROL_HINTS: Record<string, string> = {
   'View transition': 'Controls the optical zoom-level transition between microscope and list views.',
   'Focused text editing': 'Controls the fixed-lens scene transition used for cell text editing.',
   Palette: 'Live colors for cells, walls, text, states, field, and exterior.',
+  preset: 'Applies an accessible microscope-inspired cell palette without changing list view colors.',
   renderer: 'Shows whether the GPU microscope renderer is active.',
   enabled: 'Turns this effect or experimental behavior on and off.',
   'whole-circle noise': 'Adds static film grain across the entire circular field.',
@@ -52,6 +62,9 @@ const CONTROL_HINTS: Record<string, string> = {
   'grain frequency': 'Sets the spatial scale of the wall grain.',
   'grain detail': 'Sets the number of noise octaves used by the pencil texture.',
   'grain opacity': 'Sets the opacity of the pre-shader wall texture.',
+  'group grain frequency': 'Sets the independent spatial scale of group-wall grain.',
+  'group grain detail': 'Sets the independent noise detail of group walls.',
+  'group grain opacity': 'Sets the independent pre-shader opacity of group-wall texture.',
   'nutrients enabled': 'Shows or hides seam particles without changing geometry.',
   'particles per cell': 'Sets the restrained number of orbiting particles around each cell.',
   'particle speed': 'Sets particle angular speed; the default is roughly ten times slower than the reference.',
@@ -64,6 +77,11 @@ const CONTROL_HINTS: Record<string, string> = {
   'attack ms': 'Sets how quickly hover breathing reaches full strength.',
   response: 'Controls how quickly Paper.js paths follow new geometry.',
   easing: 'Chooses the interpolation curve used by motion.',
+  'ambient motion': 'Lets a restrained subset of cells breathe while the canvas is idle.',
+  'idle amplitude px': 'Maximum render-only edge movement for idle cell breathing.',
+  'idle period ms': 'Duration of one ambient breathing cycle.',
+  'phase spread': 'Offsets breathing phases across cells; zero moves them together.',
+  coverage: 'Sets the deterministic share of cells participating in ambient motion.',
   'delay min': 'Minimum randomized wait before automatic seed spawning.',
   'delay max': 'Maximum randomized wait before automatic seed spawning.',
   'spawn rate': 'Scales how frequently valid Delaunay gaps produce seeds.',
@@ -74,6 +92,9 @@ const CONTROL_HINTS: Record<string, string> = {
   'incubate delay': 'Rest time before an untouched empty cell synthesizes text.',
   'text emerge': 'Duration of the blurred incubation text reveal.',
   'text blur': 'Blur applied while incubated text remains unrevealed.',
+  'text wiggle px': 'Sets the maximum gentle movement of unread incubating suggestions.',
+  'text wiggle hz': 'Sets how often unread incubating suggestions softly wiggle.',
+  'text wiggle easing': 'Chooses the motion character of incubating suggestion wiggles.',
   'sticky blobs': 'Shows organic bridges for seeds, merge targets, and armed group attachment.',
   'blob size px': 'Sets the initial visible seed diameter.',
   'sticky reach': 'Maximum gap over which a sticky bridge remains connected.',
@@ -97,7 +118,23 @@ const CONTROL_HINTS: Record<string, string> = {
   'settle duration': 'Sets how long new algorithmic groups visibly settle.',
   'merge distance': 'How close compatible cells must be before they merge.',
   'New Select': 'Moves merge and split into Select and hides the separate Merge / Split tool.',
+  'cursor proximity': 'Distance from an eligible target wall where visual excitement begins.',
+  'active zone': 'Distance from an eligible target wall that activates tint and full grain.',
+  'active tint': 'Strength of the eligible-target tint inside the active zone.',
+  'active grain': 'Multiplier applied to eligible-target wall grain inside the active zone.',
+  'merge dwell ms': 'Time the pointer must remain in an eligible target before merge is armed.',
+  'vibration attack': 'Time for source and target vibration to reach full strength.',
+  'vibration easing': 'Shape of the synchronized vibration ramp.',
+  'cell jitter px': 'Render-only source and target cell vibration amplitude.',
+  'cell jitter hz': 'Frequency of synchronized source and target cell vibration.',
+  'wall jitter px': 'Render-only target-wall excitement amplitude.',
+  'wall jitter hz': 'Frequency of target-wall excitement.',
+  'sticky slowdown': 'Frequency multiplier reached as merge dwell completes.',
   'split hold ms': 'How long to hold a cell before splitting it.',
+  'split attack ms': 'Time for stationary long-press jitter to reach its plateau.',
+  'split easing': 'Shape of the long-press jitter ramp.',
+  'split jitter px': 'Render-only long-press split jitter amplitude.',
+  'split jitter hz': 'Frequency of long-press split jitter.',
   'split minimum': 'Minimum number of thoughts created by a split.',
   'split maximum': 'Maximum number of thoughts created by a split.',
   'transition enabled': 'Turns the microscope-to-list optical transition on or off.',
@@ -126,6 +163,7 @@ interface ControlPanelProps {
   onChange: (settings: CanvasSettings) => void
   onAddSeed: () => void
   onDieSeed: () => void
+  onStartAnew: () => void
 }
 
 export function ControlPanel({
@@ -134,18 +172,21 @@ export function ControlPanel({
   onChange,
   onAddSeed,
   onDieSeed,
+  onStartAnew,
 }: ControlPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onChangeRef = useRef(onChange)
   const onAddSeedRef = useRef(onAddSeed)
   const onDieSeedRef = useRef(onDieSeed)
+  const onStartAnewRef = useRef(onStartAnew)
   const initialSettingsRef = useRef(settings)
 
   useEffect(() => {
     onChangeRef.current = onChange
     onAddSeedRef.current = onAddSeed
     onDieSeedRef.current = onDieSeed
-  }, [onAddSeed, onChange, onDieSeed])
+    onStartAnewRef.current = onStartAnew
+  }, [onAddSeed, onChange, onDieSeed, onStartAnew])
 
   useEffect(() => {
     const container = containerRef.current
@@ -186,49 +227,72 @@ export function ControlPanel({
     })
 
     const vignette = microscope.addFolder({ title: 'Microscope vignette', expanded: true })
-    vignette.addBinding(params.effects.vignette, 'enabled', { label: 'enabled' })
-    vignette.addBinding(params.effects.vignette, 'intensity', {
+    const vignetteChoice: { profile: 'regular' | 'focused' } = { profile: 'regular' }
+    const vignetteParams = structuredClone(params.effects.vignette)
+    const syncVignetteProfile = () => {
+      const target =
+        vignetteChoice.profile === 'focused'
+          ? params.effects.focusVignette
+          : params.effects.vignette
+      Object.assign(target, vignetteParams)
+      emitSettings()
+    }
+    vignette
+      .addBinding(vignetteChoice, 'profile', {
+        label: 'profile',
+        options: { 'Regular view': 'regular', 'Focused edit': 'focused' },
+      })
+      .on('change', ({ value }) => {
+        const source =
+          value === 'focused' ? params.effects.focusVignette : params.effects.vignette
+        Object.assign(vignetteParams, structuredClone(source))
+        pane.refresh()
+      })
+    vignette
+      .addBinding(vignetteParams, 'enabled', { label: 'enabled' })
+      .on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'intensity', {
       label: 'intensity',
       min: 0,
       max: 1,
       step: 0.01,
-    })
-    vignette.addBinding(params.effects.vignette, 'dim', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'dim', {
       label: 'rim dim',
       min: 0,
       max: 0.8,
       step: 0.01,
-    })
-    vignette.addBinding(params.effects.vignette, 'blurRadius', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'blurRadius', {
       label: 'blur px',
       min: 0,
       max: 12,
       step: 0.25,
-    })
-    vignette.addBinding(params.effects.vignette, 'rimWidth', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'rimWidth', {
       label: 'rim width',
       min: 0.04,
       max: 0.35,
       step: 0.01,
-    })
-    vignette.addBinding(params.effects.vignette, 'softness', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'softness', {
       label: 'softness',
       min: 0.01,
       max: 0.24,
       step: 0.01,
-    })
-    vignette.addBinding(params.effects.vignette, 'distortion', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'distortion', {
       label: 'distortion',
       min: 0,
       max: 0.03,
       step: 0.001,
-    })
-    vignette.addBinding(params.effects.vignette, 'grain', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'grain', {
       label: 'grain / noise',
       min: 0,
       max: 0.08,
       step: 0.001,
-    })
+    }).on('change', syncVignetteProfile)
 
     const lens = microscope.addFolder({ title: 'Lens shader', expanded: true })
     lens.addBinding(params.effects.lens, 'enabled', { label: 'enabled' })
@@ -334,9 +398,9 @@ export function ControlPanel({
     geometry.addBinding(params.geometry, 'wallGrainEnabled', { label: 'grain enabled' })
     geometry.addBinding(params.geometry, 'wallGrainFrequency', {
       label: 'grain frequency',
-      min: 0.002,
-      max: 0.08,
-      step: 0.001,
+      min: 0.01,
+      max: 3,
+      step: 0.01,
     })
     geometry.addBinding(params.geometry, 'wallGrainOctaves', {
       label: 'grain detail',
@@ -415,6 +479,33 @@ export function ControlPanel({
       options: { Smooth: 'smooth', Spring: 'spring', Direct: 'direct' },
     })
 
+    const ambient = pane.addFolder({ title: 'Ambient culture motion', expanded: false })
+    ambient.addBinding(params.motion, 'ambientEnabled', { label: 'ambient motion' })
+    ambient.addBinding(params.motion, 'ambientAmplitudePx', {
+      label: 'idle amplitude px',
+      min: 0,
+      max: 3,
+      step: 0.02,
+    })
+    ambient.addBinding(params.motion, 'ambientPeriodMs', {
+      label: 'idle period ms',
+      min: 1200,
+      max: 16000,
+      step: 100,
+    })
+    ambient.addBinding(params.motion, 'ambientPhaseSpread', {
+      label: 'phase spread',
+      min: 0,
+      max: 1,
+      step: 0.01,
+    })
+    ambient.addBinding(params.motion, 'ambientCoverage', {
+      label: 'coverage',
+      min: 0,
+      max: 1,
+      step: 0.01,
+    })
+
     const seed = pane.addFolder({ title: 'Auto-growth seeds', expanded: false })
     seed.addBinding(params.seed, 'delayMinMs', {
       label: 'delay min',
@@ -477,8 +568,24 @@ export function ControlPanel({
     seed.addBinding(params.seed, 'incubationBlur', {
       label: 'text blur',
       min: 0,
-      max: 16,
+      max: 28,
       step: 0.5,
+    })
+    seed.addBinding(params.seed, 'incubationWigglePx', {
+      label: 'text wiggle px',
+      min: 0,
+      max: 3,
+      step: 0.1,
+    })
+    seed.addBinding(params.seed, 'incubationWiggleHz', {
+      label: 'text wiggle hz',
+      min: 0.2,
+      max: 5,
+      step: 0.1,
+    })
+    seed.addBinding(params.seed, 'incubationWiggleEasing', {
+      label: 'text wiggle easing',
+      options: { Smooth: 'smooth', Spring: 'spring', Linear: 'linear' },
     })
     seed.addBinding(params.seed, 'stickyEnabled', {
       label: 'sticky blobs',
@@ -556,6 +663,24 @@ export function ControlPanel({
       max: 12,
       step: 1,
     })
+    group.addBinding(params.group, 'wallGrainFrequency', {
+      label: 'group grain frequency',
+      min: 0.01,
+      max: 3,
+      step: 0.01,
+    })
+    group.addBinding(params.group, 'wallGrainOctaves', {
+      label: 'group grain detail',
+      min: 1,
+      max: 4,
+      step: 1,
+    })
+    group.addBinding(params.group, 'wallGrainOpacity', {
+      label: 'group grain opacity',
+      min: 0,
+      max: 1,
+      step: 0.01,
+    })
     group.addBinding(params.group, 'attraction', {
       label: 'attraction',
       min: 0.1,
@@ -627,11 +752,103 @@ export function ControlPanel({
       max: 120,
       step: 2,
     })
+    mergeSplit.addBinding(params.mergeSplit, 'proximityPx', {
+      label: 'cursor proximity',
+      min: 20,
+      max: 180,
+      step: 2,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'activeZonePx', {
+      label: 'active zone',
+      min: 2,
+      max: 64,
+      step: 1,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'activeZoneTint', {
+      label: 'active tint',
+      min: 0,
+      max: 1,
+      step: 0.01,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'activeZoneGrain', {
+      label: 'active grain',
+      min: 1,
+      max: 4,
+      step: 0.05,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'mergeDwellMs', {
+      label: 'merge dwell ms',
+      min: 120,
+      max: 1800,
+      step: 20,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'vibrationAttackMs', {
+      label: 'vibration attack',
+      min: 20,
+      max: 800,
+      step: 10,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'vibrationEasing', {
+      label: 'vibration easing',
+      options: { Smooth: 'smooth', Spring: 'spring', Linear: 'linear' },
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'cellJitterAmplitudePx', {
+      label: 'cell jitter px',
+      min: 0,
+      max: 8,
+      step: 0.1,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'cellJitterFrequencyHz', {
+      label: 'cell jitter hz',
+      min: 0.5,
+      max: 30,
+      step: 0.5,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'wallJitterAmplitudePx', {
+      label: 'wall jitter px',
+      min: 0,
+      max: 12,
+      step: 0.1,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'wallJitterFrequencyHz', {
+      label: 'wall jitter hz',
+      min: 0.5,
+      max: 30,
+      step: 0.5,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'stickySlowdown', {
+      label: 'sticky slowdown',
+      min: 0.05,
+      max: 1,
+      step: 0.01,
+    })
     mergeSplit.addBinding(params.mergeSplit, 'longPressMs', {
       label: 'split hold ms',
       min: 400,
       max: 1400,
       step: 20,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'splitJitterAttackMs', {
+      label: 'split attack ms',
+      min: 20,
+      max: 1000,
+      step: 10,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'splitJitterEasing', {
+      label: 'split easing',
+      options: { Smooth: 'smooth', Spring: 'spring', Linear: 'linear' },
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'splitJitterAmplitudePx', {
+      label: 'split jitter px',
+      min: 0,
+      max: 10,
+      step: 0.1,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'splitJitterFrequencyHz', {
+      label: 'split jitter hz',
+      min: 0.5,
+      max: 30,
+      step: 0.5,
     })
     mergeSplit.addBinding(params.mergeSplit, 'splitMin', {
       label: 'split minimum',
@@ -707,6 +924,22 @@ export function ControlPanel({
     })
 
     const palette = pane.addFolder({ title: 'Palette', expanded: false })
+    const paletteChoice: { preset: PalettePresetId | 'custom' } = {
+      preset: identifyPalettePreset(params.palette),
+    }
+    const presetBinding = palette.addBinding(paletteChoice, 'preset', {
+      label: 'preset',
+      options: Object.fromEntries([
+        ...PALETTE_PRESETS.map((preset) => [preset.label, preset.id]),
+        ['Custom', 'custom'],
+      ]),
+    })
+    presetBinding.on('change', ({ value }) => {
+      if (value === 'custom') return
+      Object.assign(params.palette, structuredClone(palettePresetById(value).palette))
+      pane.refresh()
+      emitSettings()
+    })
     const colorBindings: Array<[keyof CanvasSettings['palette'], string]> = [
       ['cellLight', 'cell light'],
       ['cellMid', 'cell mid'],
@@ -731,12 +964,18 @@ export function ControlPanel({
       ['exterior', 'exterior'],
     ]
     for (const [key, label] of colorBindings) {
-      palette.addBinding(params.palette, key, { label })
+      palette.addBinding(params.palette, key, { label }).on('change', () => {
+        paletteChoice.preset = identifyPalettePreset(params.palette)
+        presetBinding.refresh()
+      })
     }
 
     pane.addButton({ title: 'Reset defaults' }).on('click', () => {
       const defaults = cloneSettings()
       Object.assign(params.effects.vignette, defaults.effects.vignette)
+      Object.assign(params.effects.focusVignette, defaults.effects.focusVignette)
+      Object.assign(vignetteParams, defaults.effects.vignette)
+      vignetteChoice.profile = 'regular'
       Object.assign(params.effects.lens, defaults.effects.lens)
       Object.assign(params.effects.crt, defaults.effects.crt)
       Object.assign(params.effects.circle, defaults.effects.circle)
@@ -750,6 +989,7 @@ export function ControlPanel({
       Object.assign(params.editFocus, defaults.editFocus)
       Object.assign(params.clustering, defaults.clustering)
       Object.assign(params.palette, defaults.palette)
+      paletteChoice.preset = 'baseline'
       params.schemaVersion = defaults.schemaVersion
       pane.refresh()
       emitSettings()
@@ -778,6 +1018,15 @@ export function ControlPanel({
   return (
     <div className="control-panel-stack" data-testid="settings-panel">
       <div ref={containerRef} className="tweakpane-host" />
+      <button
+        className="start-anew-button"
+        data-testid="start-anew"
+        type="button"
+        onClick={() => onStartAnewRef.current()}
+      >
+        Start anew
+        <span>Erase all saved journal pages</span>
+      </button>
     </div>
   )
 }

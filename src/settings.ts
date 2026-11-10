@@ -1,19 +1,22 @@
+export interface VignetteSettings {
+  enabled: boolean
+  intensity: number
+  dim: number
+  blurRadius: number
+  rimWidth: number
+  softness: number
+  distortion: number
+  grain: number
+}
+
 export interface CanvasSettings {
   schemaVersion: number
   effects: {
     circle: {
       grain: number
     }
-    vignette: {
-      enabled: boolean
-      intensity: number
-      dim: number
-      blurRadius: number
-      rimWidth: number
-      softness: number
-      distortion: number
-      grain: number
-    }
+    vignette: VignetteSettings
+    focusVignette: VignetteSettings
     lens: {
       enabled: boolean
       shape: 'sphere'
@@ -59,6 +62,11 @@ export interface CanvasSettings {
     hoverAttackMs: number
     morphResponse: number
     easing: 'smooth' | 'spring' | 'direct'
+    ambientEnabled: boolean
+    ambientAmplitudePx: number
+    ambientPeriodMs: number
+    ambientPhaseSpread: number
+    ambientCoverage: number
   }
   seed: {
     delayMinMs: number
@@ -72,6 +80,9 @@ export interface CanvasSettings {
     incubationDelayMs: number
     incubationGrowthMs: number
     incubationBlur: number
+    incubationWigglePx: number
+    incubationWiggleHz: number
+    incubationWiggleEasing: 'smooth' | 'spring' | 'linear'
     stickyEnabled: boolean
     blobSizePx: number
     stickyDistancePx: number
@@ -85,6 +96,9 @@ export interface CanvasSettings {
   group: {
     wallThickness: number
     wallGap: number
+    wallGrainFrequency: number
+    wallGrainOctaves: number
+    wallGrainOpacity: number
     attraction: number
     detachThreshold: number
     attachContactThreshold: number
@@ -96,7 +110,23 @@ export interface CanvasSettings {
     enabled: boolean
     newSelect: boolean
     mergeDistancePx: number
+    proximityPx: number
+    activeZonePx: number
+    activeZoneTint: number
+    activeZoneGrain: number
+    mergeDwellMs: number
+    vibrationAttackMs: number
+    vibrationEasing: 'smooth' | 'spring' | 'linear'
+    cellJitterAmplitudePx: number
+    cellJitterFrequencyHz: number
+    wallJitterAmplitudePx: number
+    wallJitterFrequencyHz: number
+    stickySlowdown: number
     longPressMs: number
+    splitJitterAttackMs: number
+    splitJitterEasing: 'smooth' | 'spring' | 'linear'
+    splitJitterAmplitudePx: number
+    splitJitterFrequencyHz: number
     splitMin: number
     splitMax: number
   }
@@ -147,7 +177,7 @@ export interface CanvasSettings {
   }
 }
 
-export const SETTINGS_SCHEMA_VERSION = 10
+export const SETTINGS_SCHEMA_VERSION = 13
 
 export const defaultSettings: CanvasSettings = {
   schemaVersion: SETTINGS_SCHEMA_VERSION,
@@ -164,6 +194,16 @@ export const defaultSettings: CanvasSettings = {
       softness: 0.06,
       distortion: 0.002,
       grain: 0.024,
+    },
+    focusVignette: {
+      enabled: true,
+      intensity: 0.78,
+      dim: 0.56,
+      blurRadius: 0.25,
+      rimWidth: 0.24,
+      softness: 0.08,
+      distortion: 0.001,
+      grain: 0.018,
     },
     lens: {
       enabled: true,
@@ -191,9 +231,9 @@ export const defaultSettings: CanvasSettings = {
     textInset: 24,
     wallGrainEnabled: true,
     wallGrain: 0.65,
-    wallGrainFrequency: 0.018,
-    wallGrainOctaves: 2,
-    wallGrainOpacity: 0.74,
+    wallGrainFrequency: 2.4,
+    wallGrainOctaves: 1,
+    wallGrainOpacity: 0.64,
   },
   particles: {
     enabled: true,
@@ -210,6 +250,11 @@ export const defaultSettings: CanvasSettings = {
     hoverAttackMs: 300,
     morphResponse: 32,
     easing: 'smooth',
+    ambientEnabled: true,
+    ambientAmplitudePx: 0.58,
+    ambientPeriodMs: 6200,
+    ambientPhaseSpread: 0.42,
+    ambientCoverage: 0.72,
   },
   seed: {
     delayMinMs: 4800,
@@ -222,7 +267,10 @@ export const defaultSettings: CanvasSettings = {
     sizeRatio: 0.125,
     incubationDelayMs: 3000,
     incubationGrowthMs: 2400,
-    incubationBlur: 8,
+    incubationBlur: 16,
+    incubationWigglePx: 0.8,
+    incubationWiggleHz: 1.6,
+    incubationWiggleEasing: 'spring',
     stickyEnabled: true,
     blobSizePx: 20,
     stickyDistancePx: 92,
@@ -230,12 +278,15 @@ export const defaultSettings: CanvasSettings = {
     stickyTension: 0.58,
     stickyWobble: 0.1,
     stickyResponse: 18,
-    expirySeconds: 180,
-    expiryShrinkMs: 1200,
+    expirySeconds: 45,
+    expiryShrinkMs: 2200,
   },
   group: {
     wallThickness: 12,
     wallGap: 2,
+    wallGrainFrequency: 0.1,
+    wallGrainOctaves: 2,
+    wallGrainOpacity: 0.74,
     attraction: 0.32,
     detachThreshold: 0.8,
     attachContactThreshold: 2,
@@ -246,8 +297,24 @@ export const defaultSettings: CanvasSettings = {
   mergeSplit: {
     enabled: true,
     newSelect: true,
-    mergeDistancePx: 58,
+    mergeDistancePx: 36,
+    proximityPx: 32,
+    activeZonePx: 44,
+    activeZoneTint: 0.24,
+    activeZoneGrain: 1.2,
+    mergeDwellMs: 720,
+    vibrationAttackMs: 180,
+    vibrationEasing: 'smooth',
+    cellJitterAmplitudePx: 1.2,
+    cellJitterFrequencyHz: 8,
+    wallJitterAmplitudePx: 2,
+    wallJitterFrequencyHz: 12,
+    stickySlowdown: 0.32,
     longPressMs: 720,
+    splitJitterAttackMs: 220,
+    splitJitterEasing: 'smooth',
+    splitJitterAmplitudePx: 2,
+    splitJitterFrequencyHz: 12,
     splitMin: 2,
     splitMax: 4,
   },
@@ -298,6 +365,157 @@ export const defaultSettings: CanvasSettings = {
   },
 }
 
+export type PalettePresetId =
+  | 'baseline'
+  | 'botanical-stain'
+  | 'chloroplast-amber'
+  | 'polarized-tide'
+  | 'organelle-night'
+
+export interface PalettePreset {
+  id: PalettePresetId
+  label: string
+  description: string
+  palette: CanvasSettings['palette']
+}
+
+const baselinePalette = cloneSettings(defaultSettings).palette
+
+export const PALETTE_PRESETS: readonly PalettePreset[] = [
+  {
+    id: 'baseline',
+    label: 'Baseline · Graphite culture',
+    description: 'The neutral graphite microscope palette.',
+    palette: baselinePalette,
+  },
+  {
+    id: 'botanical-stain',
+    label: 'Botanical stain · Cyan / carmine',
+    description: 'Warm specimen paper with cyan and carmine histology stains.',
+    palette: {
+      cellLight: '#f7ead9',
+      cellMid: '#f0ddc8',
+      cellDark: '#e7cfb9',
+      cellDeep: '#dcc1aa',
+      innerStroke: '#fff5e9',
+      seam: '#35202e',
+      handles: '#fff8ee',
+      text: '#241922',
+      selectedTint: '#89c6c7',
+      hoverTint: '#e9b5bd',
+      groupTint: '#177f88',
+      group1: '#177f88',
+      group2: '#a43462',
+      group3: '#338c9b',
+      group4: '#bd5b76',
+      group5: '#5aa3a1',
+      group6: '#8c365f',
+      group7: '#236f85',
+      group8: '#c4717f',
+      interior: '#4d263d',
+      exterior: '#120d16',
+    },
+  },
+  {
+    id: 'chloroplast-amber',
+    label: 'Chloroplast amber · Moss / gold',
+    description: 'Olive chloroplast forms suspended in amber microscope light.',
+    palette: {
+      cellLight: '#eee9c9',
+      cellMid: '#e4ddb5',
+      cellDark: '#d7cea0',
+      cellDeep: '#cbc08a',
+      innerStroke: '#fff7d7',
+      seam: '#252416',
+      handles: '#fffbe5',
+      text: '#1b2117',
+      selectedTint: '#9dad59',
+      hoverTint: '#d7c477',
+      groupTint: '#61752b',
+      group1: '#61752b',
+      group2: '#876b32',
+      group3: '#5a733f',
+      group4: '#9a7c3d',
+      group5: '#466d3d',
+      group6: '#aa8748',
+      group7: '#73883c',
+      group8: '#73552f',
+      interior: '#332d1d',
+      exterior: '#0d0d09',
+    },
+  },
+  {
+    id: 'polarized-tide',
+    label: 'Polarized tide · Aqua / pearl',
+    description: 'Cool aqua cells with the iridescent edges of polarized tissue.',
+    palette: {
+      cellLight: '#e3f1ed',
+      cellMid: '#d3e9e5',
+      cellDark: '#c2dedc',
+      cellDeep: '#b0d2d2',
+      innerStroke: '#f5fffc',
+      seam: '#123340',
+      handles: '#f2fffd',
+      text: '#102a32',
+      selectedTint: '#71bbb7',
+      hoverTint: '#a7d8d3',
+      groupTint: '#267f87',
+      group1: '#267f87',
+      group2: '#6a65a9',
+      group3: '#398d73',
+      group4: '#7e5d91',
+      group5: '#367fa5',
+      group6: '#a3657f',
+      group7: '#3f9298',
+      group8: '#5e6f9d',
+      interior: '#183b49',
+      exterior: '#071318',
+    },
+  },
+  {
+    id: 'organelle-night',
+    label: 'Organelle night · Violet / viridian',
+    description: 'A fluorescence-inspired dark field with restrained organelle color.',
+    palette: {
+      cellLight: '#34434a',
+      cellMid: '#303b48',
+      cellDark: '#382f46',
+      cellDeep: '#282d39',
+      innerStroke: '#61736f',
+      seam: '#0a0f12',
+      handles: '#f7edda',
+      text: '#fff2dc',
+      selectedTint: '#416f70',
+      hoverTint: '#4c5969',
+      groupTint: '#498f78',
+      group1: '#498f78',
+      group2: '#825b9e',
+      group3: '#5b8ba5',
+      group4: '#9a5d78',
+      group5: '#6e985c',
+      group6: '#a17a48',
+      group7: '#5470a4',
+      group8: '#8a617d',
+      interior: '#151b20',
+      exterior: '#030607',
+    },
+  },
+] as const
+
+export function palettePresetById(id: PalettePresetId) {
+  return PALETTE_PRESETS.find((preset) => preset.id === id) ?? PALETTE_PRESETS[0]
+}
+
+export function identifyPalettePreset(
+  palette: CanvasSettings['palette'],
+): PalettePresetId | 'custom' {
+  const serialized = JSON.stringify(palette)
+  return (
+    PALETTE_PRESETS.find((preset) => JSON.stringify(preset.palette) === serialized)?.id ??
+    'custom'
+  )
+}
+
 export function cloneSettings(settings: CanvasSettings = defaultSettings): CanvasSettings {
   return structuredClone(settings)
 }
@@ -319,7 +537,7 @@ export function groupColorFor(settings: CanvasSettings, order: number) {
 export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasSettings {
   if (
     !input ||
-    ![2, 3, 4, 5, 6, 7, 8, 9, SETTINGS_SCHEMA_VERSION].includes(
+    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, SETTINGS_SCHEMA_VERSION].includes(
       input.schemaVersion ?? 0,
     )
   ) {
@@ -332,6 +550,10 @@ export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasS
     effects: {
       circle: { ...defaultSettings.effects.circle, ...input.effects?.circle },
       vignette: { ...defaultSettings.effects.vignette, ...input.effects?.vignette },
+      focusVignette: {
+        ...defaultSettings.effects.focusVignette,
+        ...(input.effects?.focusVignette ?? input.effects?.vignette),
+      },
       lens: { ...defaultSettings.effects.lens, ...input.effects?.lens },
       crt: { ...defaultSettings.effects.crt, ...input.effects?.crt },
     },

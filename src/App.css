@@ -14,6 +14,73 @@
   background: #000;
 }
 
+.journal-date-rail {
+  position: fixed;
+  z-index: 54;
+  top: max(10px, env(safe-area-inset-top));
+  right: 16px;
+  left: 16px;
+  display: flex;
+  width: calc(100% - 32px);
+  pointer-events: none;
+}
+
+.journal-date-rail .date-rail {
+  pointer-events: auto;
+}
+
+.date-transition-forward-out .microscope-view-track,
+.date-transition-forward-out .list-editor,
+.date-transition-backward-out .microscope-view-track,
+.date-transition-backward-out .list-editor,
+.date-transition-forward-in .microscope-view-track,
+.date-transition-forward-in .list-editor,
+.date-transition-backward-in .microscope-view-track,
+.date-transition-backward-in .list-editor {
+  transform-origin: var(--view-transition-origin);
+  pointer-events: none;
+}
+
+.date-transition-forward-out .microscope-view-track,
+.date-transition-forward-out .list-editor {
+  animation: journal-day-forward-out var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.date-transition-forward-in .microscope-view-track,
+.date-transition-forward-in .list-editor {
+  animation: journal-day-forward-in var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.date-transition-backward-out .microscope-view-track,
+.date-transition-backward-out .list-editor {
+  animation: journal-day-backward-out var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.date-transition-backward-in .microscope-view-track,
+.date-transition-backward-in .list-editor {
+  animation: journal-day-backward-in var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+@keyframes journal-day-forward-out {
+  0% { filter: blur(0); opacity: 1; transform: translateX(0) rotate(0) scale(1); }
+  100% { filter: blur(calc(var(--view-transition-blur) * 0.65)); opacity: 0; transform: translateX(-62vw) rotate(-8deg) scale(0.94); }
+}
+
+@keyframes journal-day-forward-in {
+  0% { filter: blur(calc(var(--view-transition-blur) * 0.65)); opacity: 0; transform: translateX(62vw) rotate(8deg) scale(0.94); }
+  100% { filter: blur(0); opacity: 1; transform: translateX(0) rotate(0) scale(1); }
+}
+
+@keyframes journal-day-backward-out {
+  0% { filter: blur(0); opacity: 1; transform: translateX(0) rotate(0) scale(1); }
+  100% { filter: blur(calc(var(--view-transition-blur) * 0.65)); opacity: 0; transform: translateX(62vw) rotate(8deg) scale(0.94); }
+}
+
+@keyframes journal-day-backward-in {
+  0% { filter: blur(calc(var(--view-transition-blur) * 0.65)); opacity: 0; transform: translateX(-62vw) rotate(-8deg) scale(0.94); }
+  100% { filter: blur(0); opacity: 1; transform: translateX(0) rotate(0) scale(1); }
+}
+
 .view-transition-list-out .list-editor {
   z-index: 21;
   transform-origin: var(--view-transition-origin);
@@ -236,25 +303,32 @@
 .cell-editor {
   position: absolute;
   z-index: 44;
-  min-width: 300px;
-  min-height: 170px;
-  max-width: min(800px, 88vw);
-  max-height: min(620px, 82vh);
   margin: 0;
-  padding: 24px 28px;
-  overflow: auto;
-  color: #2f3532;
+  padding: 0;
+  overflow: hidden;
+  color: transparent;
   border: 0;
   outline: none;
   background: transparent;
   box-shadow: none;
-  font: 500 clamp(18px, 2.2vmin, 25px)/1.48 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-weight: 500;
   text-align: center;
+  text-align-last: center;
+  pointer-events: none;
   resize: none;
   transform: translate(-50%, -50%);
-  caret-color: #202522;
-  scrollbar-width: thin;
-  mask-image: linear-gradient(to bottom, transparent 0, black 22px, black calc(100% - 22px), transparent 100%);
+  caret-color: transparent;
+  -webkit-text-fill-color: transparent;
+  contain: paint;
+}
+
+.cell-editor--focused {
+  opacity: 0;
+}
+
+.cell-editor--inline {
+  opacity: 0;
 }
 
 .focus-edit-dismiss {
@@ -275,8 +349,9 @@
 }
 
 .cell-editor::selection {
-  color: #26302b;
-  background: #c8d8d0;
+  color: transparent;
+  background: transparent;
+  -webkit-text-fill-color: transparent;
 }
 
 .tool-dock {
@@ -467,7 +542,7 @@
   width: min(680px, calc(100vw - 48px));
   min-height: 100%;
   margin: 0 auto;
-  padding: max(15vh, 92px) 0 150px;
+  padding: max(17vh, 116px) 0 150px;
 }
 
 .list-block {
@@ -524,6 +599,12 @@
   color: #8b938f;
   font-style: italic;
   opacity: 0.72;
+}
+
+.cell-editor::placeholder {
+  color: transparent;
+  opacity: 0;
+  -webkit-text-fill-color: transparent;
 }
 
 [data-tooltip]::after {
@@ -595,6 +676,38 @@
   gap: 8px;
 }
 
+.start-anew-button {
+  display: grid;
+  gap: 2px;
+  min-height: 48px;
+  padding: 8px 10px;
+  color: #f2dedd;
+  border: 1px solid rgba(241, 190, 187, 0.22);
+  border-radius: 8px;
+  background: rgba(79, 39, 40, 0.64);
+  cursor: pointer;
+  font: 650 12px/1.2 Inter, ui-sans-serif, sans-serif;
+  text-align: left;
+}
+
+.start-anew-button:hover,
+.start-anew-button:focus-visible {
+  color: #fff5f4;
+  border-color: rgba(255, 211, 208, 0.42);
+  background: rgba(105, 47, 49, 0.82);
+}
+
+.start-anew-button:focus-visible {
+  outline: 2px solid #f6e7e4;
+  outline-offset: 2px;
+}
+
+.start-anew-button span {
+  color: #d7b9b7;
+  font-size: 10px;
+  font-weight: 500;
+}
+
 .seed-action-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -664,6 +777,12 @@
 }
 
 @media (max-width: 700px) {
+  .journal-date-rail {
+    right: 8px;
+    left: 8px;
+    width: calc(100% - 16px);
+  }
+
   .tool-dock {
     bottom: max(12px, env(safe-area-inset-bottom));
     max-width: calc(100vw - 24px);
@@ -738,6 +857,19 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .date-transition-forward-out .microscope-view-track,
+  .date-transition-forward-out .list-editor,
+  .date-transition-forward-in .microscope-view-track,
+  .date-transition-forward-in .list-editor,
+  .date-transition-backward-out .microscope-view-track,
+  .date-transition-backward-out .list-editor,
+  .date-transition-backward-in .microscope-view-track,
+  .date-transition-backward-in .list-editor {
+    filter: none;
+    transform: none;
+    animation-duration: 120ms;
+  }
+
   .view-transition-list-out .list-editor,
   .view-transition-list-in .list-editor,
   .view-transition-microscope-out .microscope-view-track,

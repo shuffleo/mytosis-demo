@@ -18,6 +18,8 @@ export interface TextLineLayout {
   width: number
   x: number
   y: number
+  start: number
+  end: number
 }
 
 export interface WrappedTextLayout {
@@ -84,6 +86,23 @@ function roundedLayoutWidth(width: number) {
   return Math.max(1, Math.floor(width * 4) / 4)
 }
 
+function cursorOffset(
+  prepared: PreparedTextWithSegments,
+  cursor: LayoutCursor,
+) {
+  let offset = 0
+  for (
+    let segmentIndex = 0;
+    segmentIndex < Math.min(cursor.segmentIndex, prepared.segments.length);
+    segmentIndex += 1
+  ) {
+    offset += prepared.segments[segmentIndex].length
+  }
+  const segment = prepared.segments[cursor.segmentIndex] ?? ''
+  offset += Array.from(segment).slice(0, cursor.graphemeIndex).join('').length
+  return offset
+}
+
 function layoutWithPretext(
   text: string,
   polygon: readonly Point2[],
@@ -133,6 +152,8 @@ function layoutWithPretext(
             width: line.width,
             x: (left + right) / 2,
             y: rowCenterY + fontSize * 0.35,
+            start: cursorOffset(prepared, line.start),
+            end: cursorOffset(prepared, line.end),
           })
           cursor = line.end
         }
@@ -158,14 +179,21 @@ function fallbackLines(
   const maximumWidth = Math.max(24, bounds.width - safeInset * 2)
   const lines = wrapWords(text.trim().split(/\s+/).filter(Boolean), maximumWidth, fontSize)
   const firstY = center.y - ((lines.length - 1) * leading) / 2
+  let searchOffset = 0
   return lines.map<TextLineLayout>((line, index) => {
     const y = firstY + index * leading
     const interval = horizontalIntervalAtY(polygon, y)
+    const locatedAt = text.indexOf(line, searchOffset)
+    const start = locatedAt >= 0 ? locatedAt : searchOffset
+    const end = start + line.length
+    searchOffset = end
     return {
       text: line,
       width: estimatedLineWidth(line, fontSize),
       x: interval ? (interval[0] + interval[1]) / 2 : center.x,
       y: y + fontSize * 0.35,
+      start,
+      end,
     }
   })
 }
@@ -348,4 +376,95 @@ export function measureTextRequirement(
     lineCount: lines.length,
     fontSize,
   }
+}
+
+export interface CaretPoint {
+  index: number
+  x: number
+  top: number
+  bottom: number
+}
+
+function measuredTextWidth(text: string, fontSize: number) {
+  if (typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('2d')
+    if (context) {
+      context.font = fontString(fontSize)
+      return context.measureText(text).width
+    }
+  }
+  return estimatedLineWidth(text, fontSize)
+}
+
+function lineForCaret(layout: WrappedTextLayout, index: number) {
+  const lines = layout.lines
+  if (lines.length === 0) return null
+  const bounded = clamp(Math.round(index), 0, lines[lines.length - 1].end)
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex]
+    if (bounded <= line.end) return { line, index: clamp(bounded, line.start, line.end) }
+    const next = lines[lineIndex + 1]
+    if (next && bounded < next.start) return { line: next, index: next.start }
+  }
+  const line = lines[lines.length - 1]
+  return { line, index: line.end }
+}
+
+export function caretPointForIndex(
+  layout: WrappedTextLayout,
+  index: number,
+): CaretPoint {
+  const match = lineForCaret(layout, index)
+  if (!match) {
+    return {
+      index: 0,
+      x: layout.center.x,
+      top: layout.center.y - layout.fontSize * 0.62,
+      bottom: layout.center.y + layout.fontSize * 0.62,
+    }
+  }
+  const prefix = match.line.text.slice(0, match.index - match.line.start)
+  const x =
+    match.line.x -
+    match.line.width / 2 +
+    measuredTextWidth(prefix, layout.fontSize)
+  return {
+    index: match.index,
+    x,
+    top: match.line.y - layout.fontSize * 0.82,
+    bottom: match.line.y + layout.fontSize * 0.24,
+  }
+}
+
+function graphemeCaretOffsets(line: TextLineLayout) {
+  const offsets = [line.start]
+  let offset = line.start
+  for (const grapheme of Array.from(line.text)) {
+    offset += grapheme.length
+    offsets.push(offset)
+  }
+  return offsets
+}
+
+export function nearestCaretIndex(
+  layout: WrappedTextLayout,
+  point: Point2,
+) {
+  if (layout.lines.length === 0) return 0
+  let nearest = layout.lines[0].start
+  let nearestDistance = Number.POSITIVE_INFINITY
+  for (const line of layout.lines) {
+    for (const index of graphemeCaretOffsets(line)) {
+      const caret = caretPointForIndex(layout, index)
+      const centerY = (caret.top + caret.bottom) / 2
+      const distanceSquared =
+        (caret.x - point.x) ** 2 + (centerY - point.y) ** 2
+      if (distanceSquared < nearestDistance) {
+        nearestDistance = distanceSquared
+        nearest = caret.index
+      }
+    }
+  }
+  return nearest
 }

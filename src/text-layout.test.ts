@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { layoutTextInPolygon, measureTextRequirement } from './text-layout'
+import {
+  caretPointForIndex,
+  layoutTextInPolygon,
+  measureTextRequirement,
+  nearestCaretIndex,
+} from './text-layout'
 
 describe('irregular cell text layout', () => {
   it('wraps journal text with a safe inset and centered line budget', () => {
@@ -66,5 +71,27 @@ describe('irregular cell text layout', () => {
     )
 
     expect(long.area).toBeGreaterThan(short.area)
+  })
+
+  it('maps clicks to stable source-text caret indices across wrapped lines', () => {
+    const layout = layoutTextInPolygon(
+      'alpha beta gamma delta',
+      [
+        { x: 0, y: 0 },
+        { x: 118, y: 0 },
+        { x: 118, y: 90 },
+        { x: 0, y: 90 },
+      ],
+      10,
+      12,
+    )
+    const betaIndex = 'alpha beta gamma delta'.indexOf('beta') + 2
+    const caret = caretPointForIndex(layout, betaIndex)
+
+    expect(nearestCaretIndex(layout, {
+      x: caret.x,
+      y: (caret.top + caret.bottom) / 2,
+    })).toBe(betaIndex)
+    expect(layout.lines.every((line) => line.end >= line.start)).toBe(true)
   })
 })

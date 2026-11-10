@@ -1,0 +1,381 @@
+.date-rail {
+  --date-rail-fg: #eef2ef;
+  --date-rail-muted: #a9b1ac;
+  --date-rail-surface: rgba(19, 23, 21, 0.96);
+  --date-rail-border: rgba(228, 237, 232, 0.16);
+  --date-rail-hover: rgba(238, 244, 240, 0.1);
+  --date-rail-selected: #d8e1dc;
+  --date-rail-selected-fg: #151916;
+  --date-rail-selected-hover: #cbd7d0;
+  position: relative;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  color: var(--date-rail-fg);
+  font: inherit;
+}
+
+.date-rail--list,
+.date-rail[data-theme='list'] {
+  --date-rail-fg: #282d2a;
+  --date-rail-muted: #69716c;
+  --date-rail-surface: rgba(248, 249, 246, 0.98);
+  --date-rail-border: rgba(40, 45, 42, 0.18);
+  --date-rail-hover: rgba(40, 45, 42, 0.08);
+  --date-rail-selected: #303631;
+  --date-rail-selected-fg: #f6f8f5;
+  --date-rail-selected-hover: #3b433e;
+}
+
+.date-rail button {
+  margin: 0;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.date-rail button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.date-rail__month-wrap {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+}
+
+.date-rail__month {
+  display: grid;
+  align-content: center;
+  min-width: 70px;
+  height: 54px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.date-rail__month:hover,
+.date-rail__month[aria-expanded='true'] {
+  background: var(--date-rail-hover);
+}
+
+.date-rail__month span {
+  overflow: hidden;
+  color: var(--date-rail-muted);
+  font-size: 10px;
+  font-weight: 680;
+  letter-spacing: 0.12em;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.date-rail__month strong {
+  font-size: 22px;
+  font-weight: 730;
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.date-rail__days {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 2px;
+  min-width: 0;
+  max-width: calc(100% - 80px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.date-rail__days::-webkit-scrollbar {
+  display: none;
+}
+
+.date-rail__day {
+  flex: 1 0 43px;
+  min-width: 43px;
+  max-width: 60px;
+  opacity: 0.6;
+}
+
+.date-rail__day.is-content {
+  opacity: 1;
+}
+
+.date-rail__day.is-future {
+  opacity: 0.4;
+}
+
+.date-rail__day button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 54px;
+  padding: 4px 5px 7px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.date-rail__day button:hover:not(:disabled) {
+  background: var(--date-rail-hover);
+}
+
+.date-rail__day button:disabled {
+  cursor: default;
+}
+
+.date-rail__weekday {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--date-rail-muted);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-overflow: clip;
+  text-transform: uppercase;
+}
+
+.date-rail__number {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+  line-height: 1;
+}
+
+.date-rail__marker {
+  position: absolute;
+  right: 8px;
+  bottom: 3px;
+  left: 8px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0;
+}
+
+.date-rail__day button[aria-pressed='true'] {
+  color: var(--date-rail-selected-fg);
+  background: var(--date-rail-selected);
+}
+
+.date-rail__day button[aria-pressed='true']:hover:not(:disabled),
+.date-rail__day button[aria-pressed='true']:focus-visible {
+  color: var(--date-rail-selected-fg);
+  background: var(--date-rail-selected-hover);
+}
+
+.date-rail__day button[aria-pressed='true'] .date-rail__weekday {
+  color: inherit;
+  opacity: 0.75;
+}
+
+.date-rail__day button[aria-pressed='true'] .date-rail__marker {
+  opacity: 1;
+}
+
+.date-calendar {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(286px, calc(100vw - 24px));
+  padding: 10px;
+  color: var(--date-rail-fg);
+  border: 1px solid var(--date-rail-border);
+  border-radius: 13px;
+  background: var(--date-rail-surface);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.28);
+  font: inherit;
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+
+.date-calendar__header {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.date-calendar__header h2 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.date-calendar__nav {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+  place-items: center;
+}
+
+.date-calendar__nav:hover:not(:disabled) {
+  background: var(--date-rail-hover);
+}
+
+.date-calendar__nav:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.date-calendar__grid {
+  display: grid;
+  gap: 2px;
+}
+
+.date-calendar__weekdays,
+.date-calendar__week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.date-calendar__weekdays span {
+  padding: 4px 0;
+  color: var(--date-rail-muted);
+  font-size: 9px;
+  font-weight: 680;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.date-calendar__cell {
+  display: grid;
+  aspect-ratio: 1;
+  opacity: 0.6;
+  place-items: stretch;
+}
+
+.date-calendar__cell.is-content {
+  opacity: 1;
+}
+
+.date-calendar__cell.is-outside {
+  color: var(--date-rail-muted);
+}
+
+.date-calendar__cell.is-future,
+.date-calendar__cell.is-outside.is-future {
+  opacity: 0.4;
+}
+
+.date-calendar__cell button {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  place-items: center;
+}
+
+.date-calendar__cell button:hover:not(:disabled) {
+  background: var(--date-rail-hover);
+}
+
+.date-calendar__cell button:disabled {
+  cursor: default;
+}
+
+.date-calendar__cell.is-selected button {
+  color: var(--date-rail-selected-fg);
+  background: var(--date-rail-selected);
+  font-weight: 720;
+}
+
+.date-calendar__cell.is-selected button:hover:not(:disabled),
+.date-calendar__cell.is-selected button:focus-visible {
+  color: var(--date-rail-selected-fg);
+  background: var(--date-rail-selected-hover);
+}
+
+.date-rail__today {
+  position: absolute;
+  top: 10px;
+  right: 0;
+  z-index: 1;
+  min-width: 58px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--date-rail-border) !important;
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(8px) scale(0.96);
+  transition:
+    opacity 220ms ease-in-out,
+    transform 360ms cubic-bezier(.2,.9,.25,1.08),
+    background-color 160ms ease;
+}
+
+.date-rail__today.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  transform: translateX(0) scale(1);
+}
+
+.date-rail__today.is-visible:hover {
+  background: var(--date-rail-hover);
+}
+
+.date-rail:has(.date-rail__today.is-visible) .date-rail__days {
+  max-width: calc(100% - 150px);
+}
+
+.date-calendar__content-dot {
+  position: absolute;
+  bottom: 3px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+@media (max-width: 520px) {
+  .date-rail {
+    gap: 4px;
+  }
+
+  .date-rail__month {
+    min-width: 62px;
+    padding-inline: 7px;
+  }
+
+  .date-rail__day {
+    flex-basis: 39px;
+    min-width: 39px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .date-rail *,
+  .date-rail *::before,
+  .date-rail *::after {
+    scroll-behavior: auto;
+    transition: none !important;
+  }
+}

@@ -198,6 +198,44 @@ export function createDefaultDocument(): VoronoiDocument {
   }
 }
 
+export function createEmptyDocument(): VoronoiDocument {
+  const document = createDefaultDocument()
+  const first = document.cells[0]
+  first.text = ''
+  first.site = { x: 0, y: 0 }
+  first.weight = 0.02
+  first.creation = {
+    source: 'manual',
+    order: 1,
+    promoted: true,
+  }
+  first.contentProvenance = {
+    provider: 'local-extractive',
+    operation: 'manual',
+    sourceIds: [],
+    themes: [],
+    tensions: [],
+    horizon: 'today',
+  }
+  first.incubation = {
+    state: 'empty',
+    sourceIds: [],
+  }
+  first.expiry = {
+    state: 'none',
+    timeoutMs: defaultSettings.seed.expirySeconds * 1000,
+  }
+  document.cells = [first]
+  document.relationships = []
+  document.groups = []
+  document.layout.zOrder = [first.id]
+  document.layout.listOrder = [first.id]
+  document.layout.nextCellNumber = 2
+  document.layout.nextGroupNumber = 1
+  document.layout.nextRelationshipNumber = 1
+  return document
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Invalid Voronoi document: ${message}`)
 }

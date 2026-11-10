@@ -1,4 +1,5 @@
 import paper from 'paper/dist/paper-core'
+import { ambientScaleOffset } from './ambient-motion'
 import {
   circlePolygon,
   clamp,
@@ -30,10 +31,22 @@ import type { ClusteringResult } from './clustering'
 import { BoundedCommandHistory } from './history'
 import { reflectiveContentProvider } from './reflective-content'
 import { cloneSettings, groupColorFor, type CanvasSettings } from './settings'
-import { seedExpiryScale } from './seed-expiry'
-import { layoutTextInPolygon, measureTextRequirement } from './text-layout'
+import { seedExpiryScale, seedExpiryVisualState } from './seed-expiry'
+import {
+  caretPointForIndex,
+  layoutTextInPolygon,
+  measureTextRequirement,
+  type WrappedTextLayout,
+} from './text-layout'
+import {
+  easeInteraction,
+  mergeVibrationState,
+  proximityExcitement,
+  splitJitterState,
+} from './interaction-effects'
 
 export type CanvasMode = 'add' | 'select' | 'group' | 'merge'
+export type EditPresentation = 'focused' | 'inline'
 
 interface CellVisual {
   fillPath: paper.Path
@@ -42,6 +55,7 @@ interface CellVisual {
   strokeGroup: paper.Group
   label: paper.Group
   lineLabels: paper.PointText[]
+  caretPath: paper.Path
   currentPoints: Point2[]
   targetPoints: Point2[]
   currentInnerPoints: Point2[]
@@ -127,6 +141,7 @@ interface GroupResizeGesture {
 interface MergeIntent {
   startedAt: number
   origin: Point2
+  pointer: Point2
   moved: boolean
   candidateId: string | null
   candidateSince: number | null
@@ -164,6 +179,14 @@ interface InteractionState {
   preview: PreviewCell | null
 }
 
+interface InteractionVisualEffect {
+  cellJitterPx: number
+  wallJitterPx: number
+  frequencyHz: number
+  tint: number
+  grainBoost: number
+}
+
 interface ItemData {
   kind: 'cell' | 'label' | 'handle' | 'group-handle' | 'group-wall'
   cellId?: string
@@ -184,14 +207,24 @@ export interface EditorLayout {
   width: number
   height: number
   polygonWidth: number
+  fontSize: number
   points: Point2[]
   text: string
+  textLayout: WrappedTextLayout
 }
 
 export interface EngineCallbacks {
-  onEditRequested: (cellId: string, text: string, ghostPrompt: string) => void
+  onEditRequested: (
+    cellId: string,
+    text: string,
+    ghostPrompt: string,
+    presentation: EditPresentation,
+  ) => void
   onEditorLayout: (layout: EditorLayout) => void
+  onEditorPointer: (point: Point2) => void
+  onInlineEditingFinished: () => void
   onSelectionChanged: (selection: string | null) => void
+  onModeChanged?: (mode: CanvasMode) => void
   onCanvasChanged?: (field: CanvasFieldBounds, animated: boolean) => void
   onHistoryChanged?: (canUndo: boolean, canRedo: boolean) => void
   onWallFrame?: (snapshot: WallRenderSnapshot) => void
@@ -209,7 +242,7 @@ export interface WallRenderSnapshot {
   width: number
   height: number
   field: { center: Point2; radius: number }
-  cells: Array<{ id: string; points: Point2[] }>
+  cells: Array<{ id: string; points: Point2[]; grainBoost: number }>
   groups: Array<{ id: string; points: Point2[]; color: string }>
 }
 
@@ -221,6 +254,7 @@ export interface VoronoiDebugSnapshot {
   selectedId: string | null
   selectedGroupId: string | null
   editingId: string | null
+  editingCaretIndex: number
   acquiringGroupId: string | null
   model: VoronoiDocument
   cells: Record<string, Point2[]>
@@ -242,6 +276,7 @@ export interface VoronoiDebugSnapshot {
   textLayouts: Record<string, { engine: 'pretext' | 'fallback'; lineCount: number }>
   stickyBridges: number
   mergeCandidateId: string | null
+  interactionEffects: Record<string, InteractionVisualEffect>
   history: { undoDepth: number; redoDepth: number }
   gesture: {
     kind: string
@@ -318,6 +353,7 @@ export class VoronoiCanvasEngine {
   private readonly groupSlotLayouts = new Map<string, GroupSlotLayout>()
   private readonly groupTextFloors = new Map<string, GroupTextFloor>()
   private readonly textWeightBoost = new Map<string, number>()
+  private readonly interactionEffects = new Map<string, InteractionVisualEffect>()
   private readonly textRequirementState = new Map<
     string,
     { requiredArea: number; actualArea: number; fits: boolean }
@@ -359,6 +395,9 @@ export class VoronoiCanvasEngine {
   private blocked = false
   private suspended = false
   private clusteringWave = false
+  private editingDraftText: string | null = null
+  private editingSelectionIndex = 0
+  private editingPresentation: EditPresentation = 'focused'
   private readonly renderFrame = (event: { time: number }) => this.render(event.time)
 
   private readonly handleDoubleClick = (event: MouseEvent) => {
@@ -579,6 +618,8 @@ export class VoronoiCanvasEngine {
       settings.group.wallThickness !== this.settings.group.wallThickness ||
       settings.geometry.seamGap !== this.settings.geometry.seamGap ||
       settings.geometry.outerGap !== this.settings.geometry.outerGap
+    const seedExpiryChanged =
+      settings.seed.expirySeconds !== this.settings.seed.expirySeconds
     this.settings = cloneSettings(settings)
     this.model.settings = cloneSettings(settings)
     if (groupGeometryChanged) {
@@ -589,6 +630,13 @@ export class VoronoiCanvasEngine {
       group.wall.gap = settings.group.wallGap
       group.wall.thickness = settings.group.wallThickness
       group.style.tint = groupColorFor(settings, group.order)
+    }
+    if (seedExpiryChanged) {
+      for (const cell of this.model.cells) {
+        if (cell.kind === 'seed' && cell.expiry.state === 'scheduled') {
+          cell.expiry.timeoutMs = settings.seed.expirySeconds * 1000
+        }
+      }
     }
     this.updateFieldBounds()
     this.canvas.style.backgroundColor = this.settings.palette.exterior
@@ -677,12 +725,18 @@ export class VoronoiCanvasEngine {
     }
   }
 
-  startEditing(cellId: string) {
+  startEditing(cellId: string, presentation: EditPresentation = 'focused') {
     if (this.blocked) return
     const cell = this.findCell(cellId)
     if (!cell || cell.kind === 'seed') return
-    this.state.mode = 'select'
+    if (this.state.mode !== 'select') {
+      this.state.mode = 'select'
+      this.callbacks.onModeChanged?.('select')
+    }
     this.state.editingId = cellId
+    this.editingDraftText = cell.text
+    this.editingSelectionIndex = cell.text.length
+    this.editingPresentation = presentation
     this.state.gesture = null
     this.selectCell(cellId)
     this.state.hoveredId = null
@@ -690,7 +744,9 @@ export class VoronoiCanvasEngine {
       cellId,
       cell.text,
       reflectiveContentProvider.manualGhostPrompt(cell.creation.order),
+      presentation,
     )
+    if (presentation === 'inline') this.canvas.style.cursor = 'default'
     this.updateCanvasState()
   }
 
@@ -717,12 +773,49 @@ export class VoronoiCanvasEngine {
       if (!cell.text) enforceSingleEmptyCell(this.model, cell.id)
     }
     this.state.editingId = null
+    this.editingDraftText = null
+    this.editingSelectionIndex = 0
     this.updateCanvasState()
   }
 
   cancelEditing() {
     this.state.editingId = null
+    this.editingDraftText = null
+    this.editingSelectionIndex = 0
     this.updateCanvasState()
+  }
+
+  updateEditingDraft(cellId: string, text: string) {
+    if (this.state.editingId !== cellId) return
+    this.editingDraftText = text
+    this.editingSelectionIndex = Math.min(this.editingSelectionIndex, text.length)
+    this.sourceDirtyToken += 1
+    this.updateCanvasState()
+  }
+
+  updateEditingSelection(cellId: string, selectionIndex: number) {
+    if (this.state.editingId !== cellId) return
+    this.editingSelectionIndex = clamp(
+      Math.round(selectionIndex),
+      0,
+      this.editingDraftText?.length ?? 0,
+    )
+    this.sourceDirtyToken += 1
+    this.updateCanvasState()
+  }
+
+  startEmptySingletonEditing() {
+    const cells = this.model.cells.filter((cell) => cell.kind === 'journal')
+    if (
+      this.blocked ||
+      this.state.editingId ||
+      cells.length !== 1 ||
+      cells[0].text.trim()
+    ) {
+      return false
+    }
+    this.startEditing(cells[0].id, 'inline')
+    return true
   }
 
   serialize() {
@@ -738,6 +831,8 @@ export class VoronoiCanvasEngine {
     this.groupSlotLayouts.clear()
     this.groupTextFloors.clear()
     this.history.clear()
+    this.editingDraftText = null
+    this.editingSelectionIndex = 0
     this.clearSelection()
     this.notifyHistoryChanged()
   }
@@ -763,7 +858,9 @@ export class VoronoiCanvasEngine {
       x: Math.cos(angle) * radius,
       y: Math.sin(angle) * radius,
     })
-    return Boolean(this.placeEmptyCell(point, 'add-cell-at-centroid'))
+    const cellId = this.placeEmptyCell(point, 'add-cell-at-centroid')
+    if (cellId) this.startEditing(cellId, 'inline')
+    return Boolean(cellId)
   }
 
   forceExpireFirstSeed() {
@@ -828,6 +925,7 @@ export class VoronoiCanvasEngine {
       selectedId: this.state.selectedCellId,
       selectedGroupId: this.state.selectedGroupId,
       editingId: this.state.editingId,
+      editingCaretIndex: this.editingSelectionIndex,
       acquiringGroupId: this.state.acquiringGroupId,
       model: cloneDocument(this.model),
       cells: Object.fromEntries(
@@ -919,6 +1017,12 @@ export class VoronoiCanvasEngine {
           : this.state.gesture
             ? this.mergeIntentFor(this.state.gesture)?.targetId ?? null
             : null,
+      interactionEffects: Object.fromEntries(
+        [...this.interactionEffects.entries()].map(([id, effect]) => [
+          id,
+          { ...effect },
+        ]),
+      ),
       history: this.history.depths,
       gesture: this.state.gesture
         ? {
@@ -1047,10 +1151,17 @@ export class VoronoiCanvasEngine {
     return clamp((requirement.area / fieldArea) + 0.004, 0.006, 0.12)
   }
 
+  private displayTextForCell(cell: CellEntity | PreviewCell) {
+    return this.state.editingId === cell.id && this.editingDraftText !== null
+      ? this.editingDraftText
+      : cell.text
+  }
+
   private currentTextWeightFloor(cell: CellEntity) {
-    if (!cell.text.trim()) return 0
+    const text = this.displayTextForCell(cell)
+    if (!text.trim()) return 0
     const requirement = measureTextRequirement(
-      cell.text,
+      text,
       this.settings.geometry.textInset,
       10,
     )
@@ -1064,11 +1175,21 @@ export class VoronoiCanvasEngine {
 
   private handleMouseMove(event: paper.ToolEvent) {
     if (this.blocked) return
-    if (this.state.editingId) return
     const mapped = this.coordinateMapper({ x: event.point.x, y: event.point.y })
     const point = { x: mapped.x, y: mapped.y }
     const paperPoint = new this.scope.Point(mapped.x, mapped.y)
     const hit = this.hitSeed(paperPoint) ?? this.hitTest(paperPoint)
+    if (this.state.editingId) {
+      if (this.editingPresentation === 'inline') {
+        this.canvas.style.cursor =
+          hit?.cellId === this.state.editingId
+            ? 'text'
+            : hit?.cellId
+              ? 'pointer'
+              : 'default'
+      }
+      return
+    }
     const interactedCell = hit?.cellId ? this.findCell(hit.cellId) : undefined
     if (this.state.mode === 'add') {
       this.state.hoveredId = hit?.cellId ?? null
@@ -1100,11 +1221,22 @@ export class VoronoiCanvasEngine {
 
   private handleMouseDown(event: paper.ToolEvent) {
     if (this.blocked) return
-    if (this.state.editingId) return
     const mapped = this.coordinateMapper({ x: event.point.x, y: event.point.y })
     const point = { x: mapped.x, y: mapped.y }
     const paperPoint = new this.scope.Point(mapped.x, mapped.y)
     const hit = this.hitSeed(paperPoint) ?? this.hitTest(paperPoint)
+    if (this.state.editingId) {
+      if (this.editingPresentation !== 'inline') return
+      if (hit?.cellId === this.state.editingId) {
+        this.callbacks.onEditorPointer(point)
+        return
+      }
+      this.finishEditing(
+        this.state.editingId,
+        this.editingDraftText ?? this.findCell(this.state.editingId)?.text ?? '',
+      )
+      this.callbacks.onInlineEditingFinished()
+    }
     const hitCell = hit?.cellId ? this.findCell(hit.cellId) : undefined
     if (hitCell?.kind === 'seed') {
       this.promoteSeed(hitCell.id)
@@ -1112,7 +1244,8 @@ export class VoronoiCanvasEngine {
     }
 
     if (this.state.mode === 'add') {
-      this.placeEmptyCell(point, 'add-cell')
+      const cellId = this.placeEmptyCell(point, 'add-cell')
+      if (cellId) this.startEditing(cellId, 'inline')
       return
     }
 
@@ -1999,7 +2132,7 @@ export class VoronoiCanvasEngine {
     this.model.layout.nextCellNumber += 1
     this.seedRuntime.set(id, {
       bornAt: time,
-      startWeight: -0.0045,
+      startWeight: 0.00002,
       targetWeight,
     })
     for (const sourceId of triple.ids) {
@@ -2304,6 +2437,7 @@ export class VoronoiCanvasEngine {
     return {
       startedAt: this.lastFrameTime,
       origin: { ...cell.site },
+      pointer: this.pixelFromSite(cell.site),
       moved: false,
       candidateId: null,
       candidateSince: null,
@@ -2326,11 +2460,11 @@ export class VoronoiCanvasEngine {
   ) {
     const intent = gesture.mergeIntent
     if (!intent) return
+    intent.pointer = { ...pointer }
     intent.moved =
       intent.moved ||
       distance(this.pixelFromSite(intent.origin), this.pixelFromSite(cell.site)) > 5
     if (!intent.moved) return
-    const thresholdPx = Math.min(32, this.settings.mergeSplit.mergeDistancePx)
     const target = this.model.cells
       .filter(
         (candidate) =>
@@ -2346,18 +2480,20 @@ export class VoronoiCanvasEngine {
         const centerDistance = center
           ? distance(pointer, center)
           : Number.POSITIVE_INFINITY
+        const edgeDistance =
+          polygon?.length && pointInPolygon(pointer, polygon)
+            ? 0
+            : polygon?.length
+              ? distanceToPolygonEdges(pointer, polygon)
+              : Number.POSITIVE_INFINITY
         const deepVisibleContact =
           Boolean(polygon?.length) &&
-          pointInPolygon(pointer, polygon!) &&
-          centerDistance <= Math.max(12, equivalentRadius * 0.58)
-        const siteDistancePx =
-          distance(candidate.site, cell.site) * Math.max(1, this.fieldRadius)
-        const siteThreshold =
-          thresholdPx * (intent.targetId === candidate.id ? 1.35 : 1)
-        if (!deepVisibleContact && siteDistancePx > siteThreshold) return null
+          edgeDistance <= this.settings.mergeSplit.activeZonePx &&
+          centerDistance <= Math.max(12, equivalentRadius + this.settings.mergeSplit.activeZonePx)
+        if (!deepVisibleContact) return null
         return {
           candidate,
-          score: deepVisibleContact ? centerDistance : 1000 + siteDistancePx,
+          score: centerDistance,
         }
       })
       .filter(
@@ -2378,11 +2514,6 @@ export class VoronoiCanvasEngine {
       intent.candidateId = candidateId
       intent.candidateSince = candidateId ? this.lastFrameTime : null
       intent.targetId = null
-    } else if (candidateId && intent.targetId === null) {
-      // The dwell starts only after the pointer settles near a candidate.
-      // Slow drags must not accidentally satisfy the hold threshold merely
-      // because several move events took a long time to render.
-      intent.candidateSince = this.lastFrameTime
     }
   }
 
@@ -2407,10 +2538,144 @@ export class VoronoiCanvasEngine {
       intent.moved &&
       intent.candidateId &&
       intent.candidateSince !== null &&
-      (time - intent.candidateSince) * 1000 >= this.settings.mergeSplit.longPressMs
+      (time - intent.candidateSince) * 1000 >= this.settings.mergeSplit.mergeDwellMs
     ) {
       intent.targetId = intent.candidateId
     }
+  }
+
+  private setInteractionEffect(
+    cellId: string,
+    patch: Partial<InteractionVisualEffect>,
+  ) {
+    const current = this.interactionEffects.get(cellId) ?? {
+      cellJitterPx: 0,
+      wallJitterPx: 0,
+      frequencyHz: 0,
+      tint: 0,
+      grainBoost: 1,
+    }
+    this.interactionEffects.set(cellId, {
+      cellJitterPx: Math.max(current.cellJitterPx, patch.cellJitterPx ?? 0),
+      wallJitterPx: Math.max(current.wallJitterPx, patch.wallJitterPx ?? 0),
+      frequencyHz: Math.max(current.frequencyHz, patch.frequencyHz ?? 0),
+      tint: Math.max(current.tint, patch.tint ?? 0),
+      grainBoost: Math.max(current.grainBoost, patch.grainBoost ?? 1),
+    })
+  }
+
+  private updateInteractionEffects(time: number) {
+    this.interactionEffects.clear()
+    const gesture = this.state.gesture
+    if (!gesture || !('cellId' in gesture)) return
+    const source = this.findCell(gesture.cellId)
+    if (!source) return
+    const intent = this.mergeIntentFor(gesture)
+    const splitStartedAt = gesture.kind === 'merge' ? gesture.startedAt : intent?.startedAt
+    const splitMoved = gesture.kind === 'merge' ? gesture.moved : intent?.moved
+    if (splitStartedAt !== undefined && !splitMoved) {
+      const amplitude = splitJitterState({
+        elapsedMs: (time - splitStartedAt) * 1000,
+        attackMs: this.settings.mergeSplit.splitJitterAttackMs,
+        easing: this.settings.mergeSplit.splitJitterEasing,
+        reducedMotion: this.reducedMotion,
+      })
+      this.setInteractionEffect(source.id, {
+        cellJitterPx: this.settings.mergeSplit.splitJitterAmplitudePx * amplitude,
+        wallJitterPx: this.settings.mergeSplit.splitJitterAmplitudePx * amplitude,
+        frequencyHz: this.settings.mergeSplit.splitJitterFrequencyHz,
+      })
+      return
+    }
+    if (!intent?.moved) return
+
+    for (const candidate of this.model.cells) {
+      if (
+        candidate.id === source.id ||
+        candidate.kind !== 'journal' ||
+        candidate.groupId !== source.groupId
+      ) {
+        continue
+      }
+      const polygon = this.visuals.get(candidate.id)?.currentPoints
+      if (!polygon?.length) continue
+      const distancePx = pointInPolygon(intent.pointer, polygon)
+        ? 0
+        : distanceToPolygonEdges(intent.pointer, polygon)
+      const excitement = easeInteraction(
+        proximityExcitement(
+          distancePx,
+          this.settings.mergeSplit.proximityPx,
+          this.settings.mergeSplit.activeZonePx,
+        ),
+        this.settings.mergeSplit.vibrationEasing,
+      )
+      if (excitement <= 0) continue
+      this.setInteractionEffect(candidate.id, {
+        wallJitterPx:
+          this.reducedMotion || intent.targetId
+            ? 0
+            : this.settings.mergeSplit.wallJitterAmplitudePx * excitement,
+        frequencyHz: this.settings.mergeSplit.wallJitterFrequencyHz,
+        tint: this.settings.mergeSplit.activeZoneTint * excitement,
+        grainBoost:
+          1 + (this.settings.mergeSplit.activeZoneGrain - 1) * excitement,
+      })
+    }
+
+    if (!intent.candidateId || intent.candidateSince === null) return
+    const vibration = mergeVibrationState({
+      elapsedMs: (time - intent.candidateSince) * 1000,
+      dwellMs: this.settings.mergeSplit.mergeDwellMs,
+      attackMs: this.settings.mergeSplit.vibrationAttackMs,
+      easing: this.settings.mergeSplit.vibrationEasing,
+      stickySlowdown: this.settings.mergeSplit.stickySlowdown,
+      reducedMotion: this.reducedMotion,
+    })
+    const frequency = this.settings.mergeSplit.cellJitterFrequencyHz * vibration.frequencyScale
+    for (const cellId of [source.id, intent.candidateId]) {
+      this.setInteractionEffect(cellId, {
+        cellJitterPx:
+          this.settings.mergeSplit.cellJitterAmplitudePx * vibration.amplitude,
+        wallJitterPx:
+          this.settings.mergeSplit.wallJitterAmplitudePx * vibration.amplitude,
+        frequencyHz: frequency,
+      })
+      const synchronized = this.interactionEffects.get(cellId)
+      if (synchronized) synchronized.frequencyHz = frequency
+    }
+  }
+
+  private applyInteractionEffect(
+    points: readonly Point2[],
+    cellId: string,
+    time: number,
+  ) {
+    const effect = this.interactionEffects.get(cellId)
+    if (
+      !effect ||
+      (effect.cellJitterPx <= 0.001 && effect.wallJitterPx <= 0.001)
+    ) {
+      return points.map((point) => ({ ...point }))
+    }
+    const center = polygonCentroid(points)
+    const phase = time * Math.PI * 2 * Math.max(0.01, effect.frequencyHz)
+    const translation = {
+      x: Math.sin(phase) * effect.cellJitterPx,
+      y: Math.cos(phase * 0.93) * effect.cellJitterPx * 0.72,
+    }
+    return points.map((point, index) => {
+      const dx = point.x - center.x
+      const dy = point.y - center.y
+      const magnitude = Math.hypot(dx, dy) || 1
+      const wallOffset =
+        Math.sin(phase + (index / Math.max(1, points.length)) * Math.PI * 10) *
+        effect.wallJitterPx
+      return {
+        x: point.x + translation.x + (dx / magnitude) * wallOffset,
+        y: point.y + translation.y + (dy / magnitude) * wallOffset,
+      }
+    })
   }
 
   private render(time: number) {
@@ -2423,6 +2688,7 @@ export class VoronoiCanvasEngine {
     this.lastFrameTime = time
     this.updateFieldBounds()
     this.updateMergeLongPress(time)
+    this.updateInteractionEffects(time)
     this.updateGroupAttachDwell(time * 1000)
     this.applyGroupAttraction(delta)
     this.updateIncubation(time * 1000)
@@ -2439,9 +2705,10 @@ export class VoronoiCanvasEngine {
       : this.model.cells
     const textRequirements = new Map<string, number>()
     const totalRequiredArea = this.model.cells.reduce((sum, cell) => {
-      if (!cell.text || cell.kind === 'seed') return sum
+      const text = this.displayTextForCell(cell)
+      if (!text || cell.kind === 'seed') return sum
       const required = measureTextRequirement(
-        cell.text,
+        text,
         this.settings.geometry.textInset,
         10,
       ).area
@@ -2459,7 +2726,8 @@ export class VoronoiCanvasEngine {
     const reservingCellSpace =
       Boolean(this.state.preview) ||
       this.model.cells.some(
-        (cell) => cell.kind === 'journal' && cell.text.trim() === '',
+        (cell) =>
+          cell.kind === 'journal' && this.displayTextForCell(cell).trim() === '',
       )
     // Adding a cell is a real layout constraint, not a decorative overlay.
     // Temporarily relax existing copy floors so neighboring sites can yield a
@@ -2567,10 +2835,41 @@ export class VoronoiCanvasEngine {
         ? Math.sin(time * 5.4 + cell.creation.order * 0.83) *
           (this.reducedMotion ? 0.002 : 0.018)
         : 0
+      const estimatedCellSpan = Math.max(
+        48,
+        this.fieldRadius * Math.sqrt(Math.max(0.002, cell.weight)) * 2,
+      )
+      const ambientPulse =
+        cell.kind === 'journal' &&
+        cell.id !== this.state.editingId &&
+        !this.state.gesture &&
+        !this.clusteringWave
+          ? ambientScaleOffset(
+              cell.creation.order,
+              time,
+              estimatedCellSpan,
+              {
+                enabled: this.settings.motion.ambientEnabled,
+                amplitudePx: this.settings.motion.ambientAmplitudePx,
+                periodMs: this.settings.motion.ambientPeriodMs,
+                phaseSpread: this.settings.motion.ambientPhaseSpread,
+                coverage: this.settings.motion.ambientCoverage,
+              },
+              this.reducedMotion,
+            )
+          : 0
+      const ambientTravelPx = ambientPulse * estimatedCellSpan
+      if (ambientTravelPx !== 0) {
+        const travelAngle = cell.creation.order * 2.399963229728653
+        pixel = {
+          x: pixel.x + Math.cos(travelAngle) * ambientTravelPx,
+          y: pixel.y + Math.sin(travelAngle) * ambientTravelPx,
+        }
+      }
       const combinedScale =
         cell.kind === 'seed'
           ? popMultiplier + clusterPulse
-          : 1 + (breathScale - 1) + clusterPulse
+          : 1 + (breathScale - 1) + clusterPulse + ambientPulse
       this.breathScales.set(cell.id, combinedScale)
 
       let weight = cell.weight
@@ -2585,7 +2884,23 @@ export class VoronoiCanvasEngine {
           seed.startWeight +
           (seed.targetWeight - seed.startWeight) * ease(progress, this.settings.seed.easing)
       }
-      if (cell.kind === 'seed') continue
+      if (cell.kind === 'seed') {
+        const expiryVisual = seedExpiryVisualState(
+          cell.expiry,
+          expiryNowMs,
+          this.settings.seed.expiryShrinkMs,
+        )
+        weight =
+          Math.max(0.000001, weight + (combinedScale - 1) * 0.0015) *
+          expiryVisual.scale
+        weightedSites.set(cell.id, {
+          id: cell.id,
+          x: pixel.x,
+          y: pixel.y,
+          weight: weight * this.fieldRadius * this.fieldRadius,
+        })
+        continue
+      }
       weight += (combinedScale - 1) * 0.055
       if (cell.id === this.state.selectedCellId) weight += 0.003
       if (cell.id === activeMergeTargetId) weight += 0.024
@@ -2611,7 +2926,7 @@ export class VoronoiCanvasEngine {
     const boundary = circlePolygon(this.fieldCenter, this.fieldRadius, 128)
     const topLevelSites: WeightedSite[] = []
     for (const cell of allCells) {
-      if (!cell.groupId && cell.kind !== 'seed') {
+      if (!cell.groupId) {
         const site = weightedSites.get(cell.id)
         if (site) topLevelSites.push(site)
       }
@@ -2628,6 +2943,59 @@ export class VoronoiCanvasEngine {
           this.fieldRadius *
           this.fieldRadius,
       })
+    }
+    // A low-weight site placed at a seam can be completely hidden by the
+    // neighbouring weighted sites. Give seeds only the extra display weight
+    // required to carve a small cell around their own site. The document
+    // weight remains unchanged, so promotion/history semantics do not drift.
+    const nonSeedTopLevelSites = topLevelSites.filter(
+      (site) => this.findCell(site.id)?.kind !== 'seed',
+    )
+    for (const seedSite of topLevelSites) {
+      const seedCell = this.findCell(seedSite.id)
+      if (seedCell?.kind !== 'seed' || nonSeedTopLevelSites.length === 0) continue
+      let dominantInfluence = Number.NEGATIVE_INFINITY
+      let dominantDistance = 0
+      for (const competitor of nonSeedTopLevelSites) {
+        const competitorDistance = Math.hypot(
+          seedSite.x - competitor.x,
+          seedSite.y - competitor.y,
+        )
+        const influenceAtSeed =
+          competitor.weight - competitorDistance * competitorDistance
+        if (influenceAtSeed > dominantInfluence) {
+          dominantInfluence = influenceAtSeed
+          dominantDistance = competitorDistance
+        }
+      }
+      const runtime = this.seedRuntime.get(seedCell.id)
+      const growthProgress = runtime
+        ? ease(
+            clamp(
+              ((time - runtime.bornAt) * 1000) / Math.max(1, this.settings.seed.growthMs),
+              0,
+              1,
+            ),
+            this.settings.seed.easing,
+          )
+        : 1
+      const expiryScale = seedExpiryVisualState(
+        seedCell.expiry,
+        expiryNowMs,
+        this.settings.seed.expiryShrinkMs,
+      ).scale
+      const desiredRadius =
+        Math.max(3, this.settings.geometry.seamGap * 0.4 + 1) *
+        (0.72 + growthProgress * 0.68) *
+        expiryScale
+      if (desiredRadius > 0) {
+        seedSite.weight = Math.max(
+          seedSite.weight,
+          dominantInfluence +
+            2 * dominantDistance * desiredRadius +
+            desiredRadius * desiredRadius,
+        )
+      }
     }
     const topLevelCells = computePowerDiagram(topLevelSites, {
       width: this.width,
@@ -2683,21 +3051,6 @@ export class VoronoiCanvasEngine {
         if (cell) cellGeometries.push({ cell, polygon: powerCell.polygon })
       }
     }
-    for (const cell of this.model.cells) {
-      if (cell.kind !== 'seed') continue
-      const hover = cell.id === this.state.hoveredId ? this.settings.seed.popScale : 1
-      const expiryScale = seedExpiryScale(
-        cell.expiry,
-        expiryNowMs,
-        this.settings.seed.expiryShrinkMs,
-      )
-      const radius = (this.settings.seed.blobSizePx / 2) * hover * expiryScale
-      if (radius < 0.2) continue
-      cellGeometries.push({
-        cell,
-        polygon: circlePolygon(this.pixelFromSite(cell.site), radius, 36),
-      })
-    }
     const activeIds = new Set<string>()
 
     for (const { cell, polygon } of cellGeometries) {
@@ -2705,22 +3058,41 @@ export class VoronoiCanvasEngine {
       const preview = 'preview' in cell
       const visual = this.ensureVisual(cell, preview)
       const seed = cell.kind === 'seed'
-      const gapped = seed
-        ? polygon
-        : insetConvexPolygon(polygon, this.settings.geometry.seamGap / 2)
+      const gapped = insetConvexPolygon(
+        polygon,
+        this.settings.geometry.seamGap / 2,
+      )
       const rounded = seed
-        ? gapped
+        ? roundedPolygon(gapped, Math.min(4, this.settings.geometry.cornerRadius), 3)
         : roundedPolygon(gapped, this.settings.geometry.cornerRadius, 5)
       if (rounded.length < 3) continue
       activeIds.add(cell.id)
       visual.preview = preview
-      visual.targetPoints = stableSamplePolygon(rounded, SAMPLE_COUNT, visual.targetPoints)
-      visual.targetInnerPoints = stableSamplePolygon(
+      const stablePoints = stableSamplePolygon(
+        rounded,
+        SAMPLE_COUNT,
+        visual.targetPoints,
+      )
+      const stableInnerPoints = stableSamplePolygon(
         rounded,
         SAMPLE_COUNT,
         visual.targetInnerPoints,
       )
-      visual.targetOpacity = preview ? 0.82 : 1
+      visual.targetPoints = this.applyInteractionEffect(stablePoints, cell.id, time)
+      visual.targetInnerPoints = this.applyInteractionEffect(
+        stableInnerPoints,
+        cell.id,
+        time,
+      )
+      visual.targetOpacity = preview
+        ? 0.82
+        : seed
+          ? seedExpiryVisualState(
+              cell.expiry,
+              expiryNowMs,
+              this.settings.seed.expiryShrinkMs,
+            ).opacity
+          : 1
       const requiredArea = (textRequirements.get(cell.id) ?? 0) * this.crowdingScale
       const actualArea = polygonArea(rounded)
       const deficit =
@@ -2764,6 +3136,7 @@ export class VoronoiCanvasEngine {
         .map(([id, visual]) => ({
           id,
           points: visual.currentPoints.map((point) => ({ ...point })),
+          grainBoost: this.interactionEffects.get(id)?.grainBoost ?? 1,
         })),
       groups: [...this.groupVisuals.entries()]
         .filter(([, visual]) => visual.currentPoints.length >= 3)
@@ -2781,7 +3154,15 @@ export class VoronoiCanvasEngine {
   private notifyCanvasChanged() {
     if (!this.callbacks.onCanvasChanged) return
     let checksum = 2166136261
-    let timeDynamic = Boolean(this.state.gesture || this.state.hoveredId || this.clusteringWave)
+    let timeDynamic = Boolean(
+      this.state.gesture ||
+        this.state.hoveredId ||
+        this.clusteringWave ||
+        (this.settings.motion.ambientEnabled &&
+          this.settings.motion.ambientAmplitudePx > 0 &&
+          this.settings.motion.ambientCoverage > 0 &&
+          !this.reducedMotion),
+    )
     let dynamic = timeDynamic
     const mix = (value: number, precision = 0.5) => {
       checksum = Math.imul(checksum ^ Math.round(value * precision), 16777619) >>> 0
@@ -2857,6 +3238,15 @@ export class VoronoiCanvasEngine {
         timeDynamic = true
         dynamic = true
       }
+      if (
+        cell.kind === 'seed' &&
+        cell.expiry.state === 'scheduled' &&
+        cell.expiry.createdAtMs !== undefined &&
+        Date.now() - cell.expiry.createdAtMs >= cell.expiry.timeoutMs * 0.68
+      ) {
+        timeDynamic = true
+        dynamic = true
+      }
     }
     for (const runtime of this.seedRuntime.values()) {
       if (
@@ -2928,6 +3318,16 @@ export class VoronoiCanvasEngine {
     label.position = new this.scope.Point(pixel.x, pixel.y)
     label.opacity = 0
     label.data = { kind: 'label', cellId: cell.id } satisfies ItemData
+    const caretPath = new this.scope.Path.Line({
+      from: [pixel.x, pixel.y - 6],
+      to: [pixel.x, pixel.y + 6],
+      strokeColor: this.settings.palette.text,
+      strokeWidth: 1.35,
+      strokeCap: 'round',
+      visible: false,
+    })
+    caretPath.data = { kind: 'label', cellId: cell.id } satisfies ItemData
+    label.addChild(caretPath)
 
     const visual: CellVisual = {
       fillPath,
@@ -2936,6 +3336,7 @@ export class VoronoiCanvasEngine {
       strokeGroup,
       label,
       lineLabels: [],
+      caretPath,
       currentPoints: startPoints.map((point) => ({ ...point })),
       targetPoints: startPoints.map((point) => ({ ...point })),
       currentInnerPoints: startPoints.map((point) => ({ ...point })),
@@ -3012,8 +3413,14 @@ export class VoronoiCanvasEngine {
       4,
       this.settings.geometry.textInset * Math.sqrt(this.crowdingScale),
     )
+    const editingText = this.displayTextForCell(cell)
+    const isEditingPlaceholder =
+      this.state.editingId === cell.id && editingText.trim().length === 0
+    const displayText = isEditingPlaceholder
+      ? reflectiveContentProvider.manualGhostPrompt(cell.creation.order)
+      : editingText
     const textLayout = layoutTextInPolygon(
-      cell.text,
+      displayText,
       visual.currentPoints,
       effectiveTextInset,
       minimumFontSize,
@@ -3039,13 +3446,35 @@ export class VoronoiCanvasEngine {
       visual.pendingLineBreakFrames = 0
       this.ensureTextLines(visual, cell.kind === 'seed' ? 0 : textLayout.lines.length, cell.id)
       const positionResponse = Math.min(1, delta * this.settings.motion.morphResponse)
+      const incubationWiggle =
+        !this.reducedMotion &&
+        cell.incubation.state === 'incubating' &&
+        this.settings.seed.incubationWigglePx > 0
+          ? (easeInteraction(
+              (Math.sin(
+                this.lastFrameTime *
+                  Math.PI *
+                  2 *
+                  this.settings.seed.incubationWiggleHz +
+                  cell.creation.order * 1.37,
+              ) +
+                1) /
+                2,
+              this.settings.seed.incubationWiggleEasing,
+            ) -
+              0.5) *
+            2 *
+            this.settings.seed.incubationWigglePx
+          : 0
       for (let index = 0; index < visual.lineLabels.length; index += 1) {
         const lineLabel = visual.lineLabels[index]
         const line = textLayout.lines[index]
         lineLabel.content = line.text
         lineLabel.fontSize = textLayout.fontSize
-        lineLabel.point.x += (line.x - lineLabel.point.x) * positionResponse
-        lineLabel.point.y += (line.y - lineLabel.point.y) * positionResponse
+        lineLabel.point.x +=
+          (line.x + incubationWiggle - lineLabel.point.x) * positionResponse
+        lineLabel.point.y +=
+          (line.y + incubationWiggle * 0.35 - lineLabel.point.y) * positionResponse
       }
       visual.label.pivot = new this.scope.Point(textLayout.center.x, textLayout.center.y)
     }
@@ -3065,8 +3494,10 @@ export class VoronoiCanvasEngine {
     const textColor = new this.scope.Color(this.settings.palette.text)
     textColor.alpha =
       cell.incubation.state === 'incubating' ? 0.28 + incubationProgress * 0.58 : 1
+    if (isEditingPlaceholder) textColor.alpha = 0.72
     for (const lineLabel of visual.lineLabels) {
       lineLabel.fillColor = textColor
+      lineLabel.fontStyle = isEditingPlaceholder ? 'italic' : 'normal'
       lineLabel.scaling = new this.scope.Point(emergenceScale, emergenceScale)
       lineLabel.data = { kind: 'label', cellId: cell.id } satisfies ItemData
     }
@@ -3080,10 +3511,29 @@ export class VoronoiCanvasEngine {
     visual.label.shadowBlur =
       cell.incubation.state === 'incubating' ? this.settings.seed.incubationBlur : 0
     visual.label.visible =
-      this.state.editingId !== cell.id &&
       cell.kind !== 'seed' &&
       polygonArea(visual.currentPoints) > 1000 &&
       textLayout.fits
+    if (this.state.editingId === cell.id) {
+      const editorTextLayout = layoutTextInPolygon(
+        editingText,
+        visual.currentPoints,
+        effectiveTextInset,
+        minimumFontSize,
+      )
+      const caret = caretPointForIndex(editorTextLayout, this.editingSelectionIndex)
+      visual.caretPath.segments[0].point.set(caret.x, caret.top)
+      visual.caretPath.segments[1].point.set(caret.x, caret.bottom)
+      visual.caretPath.strokeColor = new this.scope.Color(this.settings.palette.text)
+      visual.caretPath.opacity =
+        this.reducedMotion || Math.sin(this.lastFrameTime * Math.PI * 2) > -0.25
+          ? 0.92
+          : 0.18
+      visual.caretPath.visible = true
+      visual.caretPath.bringToFront()
+    } else {
+      visual.caretPath.visible = false
+    }
     visual.label.data = { kind: 'label', cellId: cell.id } satisfies ItemData
     this.textRequirementState.set(cell.id, {
       requiredArea,
@@ -3273,7 +3723,11 @@ export class VoronoiCanvasEngine {
     if (sourceId && targetId) {
       const source = this.findCell(sourceId)
       const target = this.findCell(targetId)
-      if (source && target) this.drawStickyBridge(source, target, time, 1)
+      if (source && target) {
+        const strandCount =
+          2 + Math.abs(source.creation.order * 31 + target.creation.order * 17) % 3
+        this.drawStickyBridge(source, target, time, 1, undefined, strandCount)
+      }
     }
     if (mergeGesture?.kind === 'move' && mergeGesture.attachArmedGroupId) {
       const source = this.findCell(mergeGesture.cellId)
@@ -3304,6 +3758,7 @@ export class VoronoiCanvasEngine {
     time: number,
     opacity: number,
     color = this.settings.palette.innerStroke,
+    strandCount = 1,
   ) {
     const sourceVisual = this.visuals.get(source.id)
     const targetVisual = this.visuals.get(target.id)
@@ -3326,6 +3781,7 @@ export class VoronoiCanvasEngine {
       Math.min(sourceVisual.innerPath.opacity, targetVisual.innerPath.opacity),
       this.settings.seed.stickyDistancePx,
       source.kind === 'seed',
+      strandCount,
     )
   }
 
@@ -3340,6 +3796,7 @@ export class VoronoiCanvasEngine {
     visualOpacity: number,
     maximumGap: number,
     sourceIsSeed = false,
+    strandCount = 1,
   ) {
     if (sourcePoints.length < 3 || targetPoints.length < 3) return
     const sourceCenter = polygonCentroid(sourcePoints)
@@ -3384,73 +3841,115 @@ export class VoronoiCanvasEngine {
       x: targetEdge.x + direction.x * targetInset,
       y: targetEdge.y + direction.y * targetInset,
     }
-    const wobblePhase =
-      time * this.settings.seed.stickyResponse * 0.12 +
-      sourceOrder * 1.71 +
-      targetOrder * 0.63
     const perpendicular = { x: -direction.y, y: direction.x }
-    const wobble =
-      Math.sin(wobblePhase) *
-      this.settings.seed.stickyWobble *
-      this.settings.seed.stickyNeckPx
     const neckHalf =
       (this.settings.seed.stickyNeckPx *
         (0.3 + 0.7 * Math.pow(falloff, 0.65))) /
       2
-    const sourceWidth = neckHalf * (sourceIsSeed ? 0.72 : 1)
-    const targetWidth = neckHalf * 1.22
-    const sourceLeft = {
-      x: sourceAnchor.x + perpendicular.x * (sourceWidth + wobble),
-      y: sourceAnchor.y + perpendicular.y * (sourceWidth + wobble),
-    }
-    const sourceRight = {
-      x: sourceAnchor.x - perpendicular.x * (sourceWidth - wobble),
-      y: sourceAnchor.y - perpendicular.y * (sourceWidth - wobble),
-    }
-    const targetLeft = {
-      x: targetAnchor.x + perpendicular.x * targetWidth,
-      y: targetAnchor.y + perpendicular.y * targetWidth,
-    }
-    const targetRight = {
-      x: targetAnchor.x - perpendicular.x * targetWidth,
-      y: targetAnchor.y - perpendicular.y * targetWidth,
-    }
     const tension = clamp(this.settings.seed.stickyTension, 0.05, 0.95)
-    const handleDistance = (gap + sourceInset + targetInset) * tension
-    const path = new this.scope.Path({
-      closed: true,
-      fillColor: color,
-      opacity:
-        opacity *
-        visualOpacity *
-        (0.42 + falloff * 0.5),
-    })
-    path.moveTo(new this.scope.Point(sourceLeft.x, sourceLeft.y))
-    path.cubicCurveTo(
-      new this.scope.Point(
-        sourceLeft.x + direction.x * handleDistance,
-        sourceLeft.y + direction.y * handleDistance,
-      ),
-      new this.scope.Point(
-        targetLeft.x - direction.x * handleDistance,
-        targetLeft.y - direction.y * handleDistance,
-      ),
-      new this.scope.Point(targetLeft.x, targetLeft.y),
-    )
-    path.lineTo(new this.scope.Point(targetRight.x, targetRight.y))
-    path.cubicCurveTo(
-      new this.scope.Point(
-        targetRight.x - direction.x * handleDistance,
-        targetRight.y - direction.y * handleDistance,
-      ),
-      new this.scope.Point(
-        sourceRight.x + direction.x * handleDistance,
-        sourceRight.y + direction.y * handleDistance,
-      ),
-      new this.scope.Point(sourceRight.x, sourceRight.y),
-    )
-    path.closePath()
-    this.stickyBridgeCount += 1
+    const count = sourceIsSeed ? 1 : Math.max(1, Math.min(4, strandCount))
+    for (let strand = 0; strand < count; strand += 1) {
+      const randomUnit = (salt: number) => {
+        const value = Math.sin(
+          (sourceOrder + 1) * 12.9898 +
+            (targetOrder + 1) * 78.233 +
+            (strand + 1) * 37.719 +
+            salt,
+        ) * 43758.5453
+        return value - Math.floor(value)
+      }
+      const centeredStrand = count === 1 ? 0 : strand - (count - 1) / 2
+      const strandOffset =
+        centeredStrand *
+        neckHalf *
+        (1.3 + randomUnit(3.1) * 0.5)
+      const widthScale = 0.68 + randomUnit(7.4) * 0.48
+      const longitudinalVariation = (randomUnit(11.8) - 0.5) * neckHalf * 1.4
+      const wobblePhase =
+        time * this.settings.seed.stickyResponse * 0.12 +
+        sourceOrder * 1.71 +
+        targetOrder * 0.63 +
+        strand * 0.92
+      const wobble =
+        Math.sin(wobblePhase) *
+        this.settings.seed.stickyWobble *
+        this.settings.seed.stickyNeckPx
+      const variedSourceAnchor = {
+        x:
+          sourceAnchor.x +
+          perpendicular.x * strandOffset -
+          direction.x * longitudinalVariation,
+        y:
+          sourceAnchor.y +
+          perpendicular.y * strandOffset -
+          direction.y * longitudinalVariation,
+      }
+      const variedTargetAnchor = {
+        x:
+          targetAnchor.x +
+          perpendicular.x * strandOffset +
+          direction.x * longitudinalVariation,
+        y:
+          targetAnchor.y +
+          perpendicular.y * strandOffset +
+          direction.y * longitudinalVariation,
+      }
+      const sourceWidth = neckHalf * (sourceIsSeed ? 0.72 : 1) * widthScale
+      const targetWidth = neckHalf * 1.22 * widthScale
+      const sourceLeft = {
+        x: variedSourceAnchor.x + perpendicular.x * (sourceWidth + wobble),
+        y: variedSourceAnchor.y + perpendicular.y * (sourceWidth + wobble),
+      }
+      const sourceRight = {
+        x: variedSourceAnchor.x - perpendicular.x * (sourceWidth - wobble),
+        y: variedSourceAnchor.y - perpendicular.y * (sourceWidth - wobble),
+      }
+      const targetLeft = {
+        x: variedTargetAnchor.x + perpendicular.x * targetWidth,
+        y: variedTargetAnchor.y + perpendicular.y * targetWidth,
+      }
+      const targetRight = {
+        x: variedTargetAnchor.x - perpendicular.x * targetWidth,
+        y: variedTargetAnchor.y - perpendicular.y * targetWidth,
+      }
+      const handleDistance =
+        (gap + sourceInset + targetInset) * tension * (0.9 + randomUnit(19.2) * 0.2)
+      const path = new this.scope.Path({
+        closed: true,
+        fillColor: color,
+        opacity:
+          opacity *
+          visualOpacity *
+          (0.42 + falloff * 0.5) *
+          (count > 1 ? 0.84 : 1),
+      })
+      path.moveTo(new this.scope.Point(sourceLeft.x, sourceLeft.y))
+      path.cubicCurveTo(
+        new this.scope.Point(
+          sourceLeft.x + direction.x * handleDistance,
+          sourceLeft.y + direction.y * handleDistance,
+        ),
+        new this.scope.Point(
+          targetLeft.x - direction.x * handleDistance,
+          targetLeft.y - direction.y * handleDistance,
+        ),
+        new this.scope.Point(targetLeft.x, targetLeft.y),
+      )
+      path.lineTo(new this.scope.Point(targetRight.x, targetRight.y))
+      path.cubicCurveTo(
+        new this.scope.Point(
+          targetRight.x - direction.x * handleDistance,
+          targetRight.y - direction.y * handleDistance,
+        ),
+        new this.scope.Point(
+          sourceRight.x + direction.x * handleDistance,
+          sourceRight.y + direction.y * handleDistance,
+        ),
+        new this.scope.Point(sourceRight.x, sourceRight.y),
+      )
+      path.closePath()
+      this.stickyBridgeCount += 1
+    }
   }
 
   private renderHandles() {
@@ -3511,15 +4010,36 @@ export class VoronoiCanvasEngine {
     if (!visual || !cell) return
     const center = polygonCentroid(visual.currentPoints)
     const bounds = polygonBounds(visual.currentPoints)
+    const safeRadius = Math.max(
+      1,
+      distanceToPolygonEdges(center, visual.currentPoints) -
+        Math.max(2, this.settings.geometry.textInset * 0.18),
+    )
+    const safeSide =
+      safeRadius *
+      Math.SQRT2 *
+      (this.editingPresentation === 'inline' ? 0.9 : 0.94)
+    const fontSize = Number(visual.lineLabels[0]?.fontSize ?? 10)
+    const editorTextLayout = layoutTextInPolygon(
+      this.displayTextForCell(cell),
+      visual.currentPoints,
+      Math.max(
+        4,
+        this.settings.geometry.textInset * Math.sqrt(this.crowdingScale),
+      ),
+      Math.max(6, Math.min(8, fontSize)),
+    )
     this.callbacks.onEditorLayout({
       cellId: cell.id,
       x: center.x,
       y: center.y,
-      width: clamp(bounds.width * 0.75, 140, 340),
-      height: bounds.height,
+      width: Math.min(bounds.width * 0.82, safeSide),
+      height: Math.min(bounds.height * 0.82, safeSide),
       polygonWidth: bounds.width,
+      fontSize,
       points: visual.currentPoints.map((point) => ({ ...point })),
-      text: cell.text,
+      text: this.displayTextForCell(cell),
+      textLayout: editorTextLayout,
     })
   }
 
@@ -3536,6 +4056,14 @@ export class VoronoiCanvasEngine {
   private cellDisplayColor(cell: CellEntity | PreviewCell, visual: CellVisual) {
     const base = this.cellBaseColor(cell)
     if (visual.preview) return this.mixColor(base, this.settings.palette.hoverTint, 0.48)
+    const interactionTint = this.interactionEffects.get(cell.id)?.tint ?? 0
+    if (interactionTint > 0) {
+      return this.mixColor(
+        base,
+        this.settings.palette.selectedTint,
+        interactionTint,
+      )
+    }
     if (cell.id === this.state.selectedCellId) {
       return this.mixColor(base, this.settings.palette.selectedTint, 0.48)
     }

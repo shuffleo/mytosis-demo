@@ -23,17 +23,55 @@ function seededUnit(seed: number) {
   return value - Math.floor(value)
 }
 
+interface StrokeGrain {
+  frequency: number
+  octaves: number
+  amplitude: number
+  seed: number
+}
+
+export function grainOffsetAt(index: number, grain: StrokeGrain) {
+  let value = 0
+  let amplitude = 1
+  let amplitudeSum = 0
+  for (let octave = 0; octave < Math.max(1, Math.round(grain.octaves)); octave += 1) {
+    const phase = grain.seed * 0.137 + octave * 1.91
+    value += Math.sin(index * grain.frequency * Math.pow(2, octave) + phase) * amplitude
+    amplitudeSum += amplitude
+    amplitude *= 0.5
+  }
+  return (value / Math.max(0.001, amplitudeSum)) * grain.amplitude
+}
+
 function strokePolygon(
   context: CanvasRenderingContext2D,
   points: readonly Point2[],
   color: string,
   width: number,
+  grain: StrokeGrain,
 ) {
   if (points.length < 3) return
+  const center = points.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x / points.length,
+      y: sum.y + point.y / points.length,
+    }),
+    { x: 0, y: 0 },
+  )
+  const textured = points.map((point, index) => {
+    const dx = point.x - center.x
+    const dy = point.y - center.y
+    const magnitude = Math.hypot(dx, dy) || 1
+    const offset = grainOffsetAt(index, grain)
+    return {
+      x: point.x + (dx / magnitude) * offset,
+      y: point.y + (dy / magnitude) * offset,
+    }
+  })
   context.beginPath()
-  context.moveTo(points[0].x, points[0].y)
-  for (let index = 1; index < points.length; index += 1) {
-    context.lineTo(points[index].x, points[index].y)
+  context.moveTo(textured[0].x, textured[0].y)
+  for (let index = 1; index < textured.length; index += 1) {
+    context.lineTo(textured[index].x, textured[index].y)
   }
   context.closePath()
   context.strokeStyle = color
@@ -104,9 +142,16 @@ export class WallTextureRenderer {
       this.settings.geometry.innerStrokeWidth,
       this.settings.group.wallThickness,
       this.settings.palette.innerStroke,
+      this.settings.geometry.wallGrain,
+      this.settings.geometry.wallGrainFrequency,
+      this.settings.geometry.wallGrainOctaves,
+      this.settings.geometry.wallGrainOpacity,
+      this.settings.group.wallGrainFrequency,
+      this.settings.group.wallGrainOctaves,
+      this.settings.group.wallGrainOpacity,
     ]
     for (const cell of snapshot.cells) {
-      parts.push(cell.id)
+      parts.push(cell.id, cell.grainBoost.toFixed(2))
       for (let index = 0; index < cell.points.length; index += 8) {
         parts.push(
           cell.points[index].x.toFixed(1),
@@ -144,21 +189,37 @@ export class WallTextureRenderer {
     )
     context.clip()
     if (this.settings.geometry.wallGrainEnabled) {
-      context.globalAlpha = this.settings.geometry.wallGrainOpacity
       for (const cell of snapshot.cells) {
+        context.globalAlpha = Math.min(
+          1,
+          this.settings.geometry.wallGrainOpacity * cell.grainBoost,
+        )
         strokePolygon(
           context,
           cell.points,
           this.settings.palette.innerStroke,
           Math.max(0.5, this.settings.geometry.innerStrokeWidth),
+          {
+            frequency: this.settings.geometry.wallGrainFrequency,
+            octaves: this.settings.geometry.wallGrainOctaves,
+            amplitude: this.settings.geometry.wallGrain * cell.grainBoost,
+            seed: hashText(cell.id),
+          },
         )
       }
+      context.globalAlpha = this.settings.group.wallGrainOpacity
       for (const group of snapshot.groups) {
         strokePolygon(
           context,
           group.points,
           group.color,
           Math.max(1, this.settings.group.wallThickness),
+          {
+            frequency: this.settings.group.wallGrainFrequency,
+            octaves: this.settings.group.wallGrainOctaves,
+            amplitude: this.settings.geometry.wallGrain,
+            seed: hashText(group.id),
+          },
         )
       }
       context.globalAlpha = 1
