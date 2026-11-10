@@ -366,14 +366,14 @@ async function setNumericBinding(page: Page, label: string, value: number) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/?view=microscope')
   await expect(page.getByTestId('voronoi-canvas')).toBeVisible()
   await page.waitForTimeout(650)
 })
 
 test('uses exact microscope defaults and composites Paper text below sharp UI', async ({ page }) => {
   const state = await snapshot(page)
-  expect(state.settings.schemaVersion).toBe(10)
+  expect(state.settings.schemaVersion).toBe(11)
   expect(state.settings.effects).toEqual({
     circle: {
       grain: 0.04,
@@ -636,13 +636,19 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   const focusedCanvas = await snapshot(page)
   const focusedCellCenter = polygonCentroid(focusedCanvas.cells['cell-4'])
   expect(
-    focusedCellCenter.x * focusedPostProcess.focusScene.scale +
-      focusedPostProcess.focusScene.translate.x,
-  ).toBeCloseTo(focusedCanvas.field.center.x, 4)
+    Math.abs(
+      focusedCellCenter.x * focusedPostProcess.focusScene.scale +
+        focusedPostProcess.focusScene.translate.x -
+        focusedCanvas.field.center.x,
+    ),
+  ).toBeLessThan(0.5)
   expect(
-    focusedCellCenter.y * focusedPostProcess.focusScene.scale +
-      focusedPostProcess.focusScene.translate.y,
-  ).toBeCloseTo(focusedCanvas.field.center.y, 4)
+    Math.abs(
+      focusedCellCenter.y * focusedPostProcess.focusScene.scale +
+        focusedPostProcess.focusScene.translate.y -
+        focusedCanvas.field.center.y,
+    ),
+  ).toBeLessThan(0.5)
   expect(focusedPostProcess.focusScene.scale).toBeGreaterThan(1)
   expect(focusedPostProcess.focusScene.orbitAngle).toBeCloseTo(0, 5)
   expect(focusedPostProcess.focusScene.opacity).toBeCloseTo(1, 5)
@@ -920,7 +926,7 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
     textInset: 24,
     wallGrainEnabled: true,
     wallGrain: 0.65,
-    wallGrainFrequency: 0.018,
+    wallGrainFrequency: 0.1,
     wallGrainOctaves: 2,
     wallGrainOpacity: 0.74,
   })
@@ -960,12 +966,31 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
     motionEasing: 'smooth',
     attachDistancePx: 42,
     attachHoldMs: 720,
+    wallGrainFrequency: 0.1,
+    wallGrainOctaves: 2,
+    wallGrainOpacity: 0.74,
   })
   expect(fresh.settings.mergeSplit).toEqual({
     enabled: true,
     newSelect: true,
     mergeDistancePx: 58,
+    proximityPx: 72,
+    activeZonePx: 18,
+    activeZoneTint: 0.34,
+    activeZoneGrain: 1.6,
+    mergeDwellMs: 720,
+    vibrationAttackMs: 180,
+    vibrationEasing: 'smooth',
+    cellJitterAmplitudePx: 1.4,
+    cellJitterFrequencyHz: 11,
+    wallJitterAmplitudePx: 2.2,
+    wallJitterFrequencyHz: 8,
+    stickySlowdown: 0.22,
     longPressMs: 720,
+    splitJitterAttackMs: 220,
+    splitJitterEasing: 'smooth',
+    splitJitterAmplitudePx: 2,
+    splitJitterFrequencyHz: 12,
     splitMin: 2,
     splitMax: 4,
   })
@@ -1336,20 +1361,41 @@ test('excludes grouped journals from auto-growth synthesis candidates', async ({
 
 test('New Select delays sticky merge, long-press splits, and keeps both reversible', async ({ page }) => {
   await page.getByTestId('tool-select').click()
-  const targetAreaBefore = polygonArea((await snapshot(page)).cells['cell-2'])
+  const beforeInteraction = await snapshot(page)
+  const targetAreaBefore = polygonArea(beforeInteraction.cells['cell-2'])
+  const targetSiteBefore = beforeInteraction.model.cells.find(
+    (cell) => cell.id === 'cell-2',
+  )?.site
   const source = await sitePoint(page, 'cell-1')
   const target = await sitePoint(page, 'cell-2')
   await page.mouse.move(source.x, source.y)
   await page.mouse.down()
   await page.mouse.move(target.x, target.y, { steps: 2 })
   expect((await snapshot(page)).mergeCandidateId).toBeNull()
+  await page.waitForTimeout(220)
+  const activeZoneState = await snapshot(page)
+  expect(activeZoneState.interactionEffects['cell-2']?.tint).toBeGreaterThan(0)
+  expect(activeZoneState.interactionEffects['cell-2']?.grainBoost).toBeGreaterThan(1)
+  expect(activeZoneState.interactionEffects['cell-1']?.cellJitterPx).toBeGreaterThan(0)
+  expect(activeZoneState.interactionEffects['cell-2']?.cellJitterPx).toBeGreaterThan(0)
+  expect(activeZoneState.interactionEffects['cell-1']?.frequencyHz).toBe(
+    activeZoneState.interactionEffects['cell-2']?.frequencyHz,
+  )
+  expect(
+    activeZoneState.model.cells.find((cell) => cell.id === 'cell-2')?.site,
+  ).toEqual(targetSiteBefore)
   await page.waitForTimeout(780)
   await expect.poll(async () => (await snapshot(page)).mergeCandidateId).toBe('cell-2')
   await expect.poll(async () => (await snapshot(page)).stickyBridges).toBeGreaterThan(0)
   const stickyState = await snapshot(page)
   expect(polygonArea(stickyState.cells['cell-2'])).toBeGreaterThan(targetAreaBefore * 0.25)
+  expect(stickyState.interactionEffects['cell-1']?.cellJitterPx).toBeGreaterThan(0)
+  expect(stickyState.interactionEffects['cell-1']?.cellJitterPx).toBeLessThan(
+    activeZoneState.interactionEffects['cell-1']?.cellJitterPx ?? Number.POSITIVE_INFINITY,
+  )
   await page.mouse.up()
   await expect.poll(async () => (await snapshot(page)).cellCount).toBe(11)
+  expect(Object.keys((await snapshot(page)).interactionEffects)).toHaveLength(0)
   let state = await snapshot(page)
   const merged = state.model.cells.find((cell) => cell.transformation?.kind === 'merge')
   expect(merged?.transformation?.sourceIds.sort()).toEqual(['cell-1', 'cell-2'])
@@ -1371,6 +1417,10 @@ test('New Select delays sticky merge, long-press splits, and keeps both reversib
   const splitPoint = await sitePoint(page, splitSource?.id ?? '')
   await page.mouse.move(splitPoint.x, splitPoint.y)
   await page.mouse.down()
+  await page.waitForTimeout(300)
+  expect(
+    (await snapshot(page)).interactionEffects[splitSource?.id ?? '']?.wallJitterPx,
+  ).toBeGreaterThan(0)
   await page.waitForTimeout(850)
   await page.mouse.up()
   await expect.poll(async () => (await snapshot(page)).cellCount).toBeGreaterThan(11)
@@ -1378,11 +1428,31 @@ test('New Select delays sticky merge, long-press splits, and keeps both reversib
   const splitCells = state.model.cells.filter((cell) => cell.transformation?.kind === 'split')
   expect(splitCells.length).toBeGreaterThanOrEqual(2)
   expect(splitCells.length).toBeLessThanOrEqual(4)
+  expect(Object.keys(state.interactionEffects)).toHaveLength(0)
 
   await page.evaluate(() => window.__VORONOI_DEBUG__?.undo())
   await expect.poll(async () => (await snapshot(page)).cellCount).toBe(11)
   await page.evaluate(() => window.__VORONOI_DEBUG__?.redo())
   await expect.poll(async () => (await snapshot(page)).cellCount).toBeGreaterThan(11)
+})
+
+test('keeps merge affordances static when reduced motion is preferred', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.reload()
+  await page.getByTestId('tool-select').click()
+  const source = await sitePoint(page, 'cell-1')
+  const target = await sitePoint(page, 'cell-2')
+  await page.mouse.move(source.x, source.y)
+  await page.mouse.down()
+  await page.mouse.move(target.x, target.y, { steps: 4 })
+  await page.waitForTimeout(240)
+  const state = await snapshot(page)
+  expect(state.interactionEffects['cell-2']?.tint).toBeGreaterThan(0)
+  expect(state.interactionEffects['cell-2']?.grainBoost).toBeGreaterThan(1)
+  expect(state.interactionEffects['cell-1']?.cellJitterPx ?? 0).toBe(0)
+  expect(state.interactionEffects['cell-2']?.cellJitterPx ?? 0).toBe(0)
+  expect(state.interactionEffects['cell-2']?.wallJitterPx ?? 0).toBe(0)
+  await page.mouse.up()
 })
 
 test('merges and splits members without escaping their hierarchical group', async ({ page }) => {

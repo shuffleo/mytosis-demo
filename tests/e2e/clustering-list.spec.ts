@@ -10,7 +10,7 @@ async function serialized(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/?view=microscope')
   await expect(page.getByTestId('voronoi-canvas')).toBeVisible()
   await page.waitForTimeout(500)
 })
@@ -281,7 +281,9 @@ test('switches to the shared-model list editor and restores the microscope', asy
   await expect(page.getByTestId('voronoi-canvas')).toBeHidden()
   await expect(page.getByTestId('settings-toggle')).toHaveCount(0)
   const toolbar = page.getByRole('toolbar', { name: 'List view controls' })
-  await expect(toolbar.getByRole('button')).toHaveCount(1)
+  await expect(toolbar.getByRole('button')).toHaveCount(3)
+  await expect(page.getByTestId('history-undo')).toBeVisible()
+  await expect(page.getByTestId('history-redo')).toBeVisible()
   await expect(page.getByTestId('return-microscope')).toBeVisible()
   expect((await page.evaluate(() => window.__VORONOI_DEBUG__?.postProcess()))?.active).toBe(false)
 

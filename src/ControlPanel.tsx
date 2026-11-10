@@ -52,6 +52,9 @@ const CONTROL_HINTS: Record<string, string> = {
   'grain frequency': 'Sets the spatial scale of the wall grain.',
   'grain detail': 'Sets the number of noise octaves used by the pencil texture.',
   'grain opacity': 'Sets the opacity of the pre-shader wall texture.',
+  'group grain frequency': 'Sets the independent spatial scale of group-wall grain.',
+  'group grain detail': 'Sets the independent noise detail of group walls.',
+  'group grain opacity': 'Sets the independent pre-shader opacity of group-wall texture.',
   'nutrients enabled': 'Shows or hides seam particles without changing geometry.',
   'particles per cell': 'Sets the restrained number of orbiting particles around each cell.',
   'particle speed': 'Sets particle angular speed; the default is roughly ten times slower than the reference.',
@@ -97,7 +100,23 @@ const CONTROL_HINTS: Record<string, string> = {
   'settle duration': 'Sets how long new algorithmic groups visibly settle.',
   'merge distance': 'How close compatible cells must be before they merge.',
   'New Select': 'Moves merge and split into Select and hides the separate Merge / Split tool.',
+  'cursor proximity': 'Distance from an eligible target wall where visual excitement begins.',
+  'active zone': 'Distance from an eligible target wall that activates tint and full grain.',
+  'active tint': 'Strength of the eligible-target tint inside the active zone.',
+  'active grain': 'Multiplier applied to eligible-target wall grain inside the active zone.',
+  'merge dwell ms': 'Time the pointer must remain in an eligible target before merge is armed.',
+  'vibration attack': 'Time for source and target vibration to reach full strength.',
+  'vibration easing': 'Shape of the synchronized vibration ramp.',
+  'cell jitter px': 'Render-only source and target cell vibration amplitude.',
+  'cell jitter hz': 'Frequency of synchronized source and target cell vibration.',
+  'wall jitter px': 'Render-only target-wall excitement amplitude.',
+  'wall jitter hz': 'Frequency of target-wall excitement.',
+  'sticky slowdown': 'Frequency multiplier reached as merge dwell completes.',
   'split hold ms': 'How long to hold a cell before splitting it.',
+  'split attack ms': 'Time for stationary long-press jitter to reach its plateau.',
+  'split easing': 'Shape of the long-press jitter ramp.',
+  'split jitter px': 'Render-only long-press split jitter amplitude.',
+  'split jitter hz': 'Frequency of long-press split jitter.',
   'split minimum': 'Minimum number of thoughts created by a split.',
   'split maximum': 'Maximum number of thoughts created by a split.',
   'transition enabled': 'Turns the microscope-to-list optical transition on or off.',
@@ -334,9 +353,9 @@ export function ControlPanel({
     geometry.addBinding(params.geometry, 'wallGrainEnabled', { label: 'grain enabled' })
     geometry.addBinding(params.geometry, 'wallGrainFrequency', {
       label: 'grain frequency',
-      min: 0.002,
-      max: 0.08,
-      step: 0.001,
+      min: 0.01,
+      max: 3,
+      step: 0.01,
     })
     geometry.addBinding(params.geometry, 'wallGrainOctaves', {
       label: 'grain detail',
@@ -556,6 +575,24 @@ export function ControlPanel({
       max: 12,
       step: 1,
     })
+    group.addBinding(params.group, 'wallGrainFrequency', {
+      label: 'group grain frequency',
+      min: 0.01,
+      max: 3,
+      step: 0.01,
+    })
+    group.addBinding(params.group, 'wallGrainOctaves', {
+      label: 'group grain detail',
+      min: 1,
+      max: 4,
+      step: 1,
+    })
+    group.addBinding(params.group, 'wallGrainOpacity', {
+      label: 'group grain opacity',
+      min: 0,
+      max: 1,
+      step: 0.01,
+    })
     group.addBinding(params.group, 'attraction', {
       label: 'attraction',
       min: 0.1,
@@ -627,11 +664,103 @@ export function ControlPanel({
       max: 120,
       step: 2,
     })
+    mergeSplit.addBinding(params.mergeSplit, 'proximityPx', {
+      label: 'cursor proximity',
+      min: 20,
+      max: 180,
+      step: 2,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'activeZonePx', {
+      label: 'active zone',
+      min: 2,
+      max: 64,
+      step: 1,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'activeZoneTint', {
+      label: 'active tint',
+      min: 0,
+      max: 1,
+      step: 0.01,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'activeZoneGrain', {
+      label: 'active grain',
+      min: 1,
+      max: 4,
+      step: 0.05,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'mergeDwellMs', {
+      label: 'merge dwell ms',
+      min: 120,
+      max: 1800,
+      step: 20,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'vibrationAttackMs', {
+      label: 'vibration attack',
+      min: 20,
+      max: 800,
+      step: 10,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'vibrationEasing', {
+      label: 'vibration easing',
+      options: { Smooth: 'smooth', Spring: 'spring', Linear: 'linear' },
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'cellJitterAmplitudePx', {
+      label: 'cell jitter px',
+      min: 0,
+      max: 8,
+      step: 0.1,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'cellJitterFrequencyHz', {
+      label: 'cell jitter hz',
+      min: 0.5,
+      max: 30,
+      step: 0.5,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'wallJitterAmplitudePx', {
+      label: 'wall jitter px',
+      min: 0,
+      max: 12,
+      step: 0.1,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'wallJitterFrequencyHz', {
+      label: 'wall jitter hz',
+      min: 0.5,
+      max: 30,
+      step: 0.5,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'stickySlowdown', {
+      label: 'sticky slowdown',
+      min: 0.05,
+      max: 1,
+      step: 0.01,
+    })
     mergeSplit.addBinding(params.mergeSplit, 'longPressMs', {
       label: 'split hold ms',
       min: 400,
       max: 1400,
       step: 20,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'splitJitterAttackMs', {
+      label: 'split attack ms',
+      min: 20,
+      max: 1000,
+      step: 10,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'splitJitterEasing', {
+      label: 'split easing',
+      options: { Smooth: 'smooth', Spring: 'spring', Linear: 'linear' },
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'splitJitterAmplitudePx', {
+      label: 'split jitter px',
+      min: 0,
+      max: 10,
+      step: 0.1,
+    })
+    mergeSplit.addBinding(params.mergeSplit, 'splitJitterFrequencyHz', {
+      label: 'split jitter hz',
+      min: 0.5,
+      max: 30,
+      step: 0.5,
     })
     mergeSplit.addBinding(params.mergeSplit, 'splitMin', {
       label: 'split minimum',

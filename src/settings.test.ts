@@ -11,7 +11,7 @@ describe('refined control defaults', () => {
       textInset: 24,
       wallGrainEnabled: true,
       wallGrain: 0.65,
-      wallGrainFrequency: 0.018,
+      wallGrainFrequency: 0.1,
       wallGrainOctaves: 2,
       wallGrainOpacity: 0.74,
     })
@@ -51,6 +51,9 @@ describe('refined control defaults', () => {
     expect(defaultSettings.group).toMatchObject({
       wallThickness: 12,
       wallGap: 2,
+      wallGrainFrequency: 0.1,
+      wallGrainOctaves: 2,
+      wallGrainOpacity: 0.74,
       attraction: 0.32,
       detachThreshold: 0.8,
       motionEasing: 'smooth',
@@ -61,7 +64,23 @@ describe('refined control defaults', () => {
       enabled: true,
       newSelect: true,
       mergeDistancePx: 58,
+      proximityPx: 72,
+      activeZonePx: 18,
+      activeZoneTint: 0.34,
+      activeZoneGrain: 1.6,
+      mergeDwellMs: 720,
+      vibrationAttackMs: 180,
+      vibrationEasing: 'smooth',
+      cellJitterAmplitudePx: 1.4,
+      cellJitterFrequencyHz: 11,
+      wallJitterAmplitudePx: 2.2,
+      wallJitterFrequencyHz: 8,
+      stickySlowdown: 0.22,
       longPressMs: 720,
+      splitJitterAttackMs: 220,
+      splitJitterEasing: 'smooth',
+      splitJitterAmplitudePx: 2,
+      splitJitterFrequencyHz: 12,
       splitMin: 2,
       splitMax: 4,
     })
@@ -137,7 +156,7 @@ describe('refined control defaults', () => {
     })
     expect(migrated.geometry.seamGap).toBe(18)
     expect(migrated.effects).toEqual(defaultSettings.effects)
-    expect(migrated.schemaVersion).toBe(10)
+    expect(migrated.schemaVersion).toBe(11)
     expect(migrated.seed.expirySeconds).toBe(180)
     expect(migrated.clustering.autoK).toBe(true)
   })
@@ -151,7 +170,7 @@ describe('refined control defaults', () => {
     legacy.effects.vignette.grain = 0
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(10)
+    expect(migrated.schemaVersion).toBe(11)
     expect(migrated.effects.vignette.grain).toBe(0)
     expect(migrated.effects.lens.glow).toBe(0.2)
     expect(migrated.effects.lens.glowRadius).toBe(2.5)
@@ -164,7 +183,7 @@ describe('refined control defaults', () => {
     delete (legacy.geometry as Partial<typeof legacy.geometry>).wallGrain
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(10)
+    expect(migrated.schemaVersion).toBe(11)
     expect(migrated.effects.circle.grain).toBe(0.04)
     expect(migrated.geometry.wallGrain).toBe(0.65)
   })
@@ -189,7 +208,7 @@ describe('refined control defaults', () => {
     delete (legacy.palette as Partial<typeof legacy.palette>).group8
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(10)
+    expect(migrated.schemaVersion).toBe(11)
     expect(migrated.geometry.wallGrainEnabled).toBe(true)
     expect(migrated.particles).toEqual(defaultSettings.particles)
     expect(migrated.editFocus).toEqual(defaultSettings.editFocus)
@@ -205,9 +224,29 @@ describe('refined control defaults', () => {
     delete (legacy.editFocus as Partial<typeof legacy.editFocus>).arcDepth
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(10)
+    expect(migrated.schemaVersion).toBe(11)
     expect(migrated.editFocus.trackTransitionEnabled).toBe(true)
     expect(migrated.editFocus.arcDepth).toBe(1.8)
+  })
+
+  it('migrates version ten with independent interaction and group grain controls', () => {
+    const legacy = structuredClone(defaultSettings)
+    legacy.schemaVersion = 10
+    delete (legacy.group as Partial<typeof legacy.group>).wallGrainFrequency
+    delete (legacy.group as Partial<typeof legacy.group>).wallGrainOctaves
+    delete (legacy.group as Partial<typeof legacy.group>).wallGrainOpacity
+    delete (legacy.mergeSplit as Partial<typeof legacy.mergeSplit>).mergeDwellMs
+    delete (
+      legacy.mergeSplit as Partial<typeof legacy.mergeSplit>
+    ).splitJitterAmplitudePx
+
+    const migrated = migrateSettings(legacy)
+    expect(migrated.schemaVersion).toBe(11)
+    expect(migrated.group.wallGrainFrequency).toBe(0.1)
+    expect(migrated.group.wallGrainOctaves).toBe(2)
+    expect(migrated.group.wallGrainOpacity).toBe(0.74)
+    expect(migrated.mergeSplit.mergeDwellMs).toBe(720)
+    expect(migrated.mergeSplit.splitJitterAmplitudePx).toBe(2)
   })
 
   it('rotates the eight group colors deterministically', () => {

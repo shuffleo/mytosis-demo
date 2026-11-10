@@ -3,6 +3,7 @@ import {
   CANVAS_SCHEMA_VERSION,
   cloneDocument,
   createDefaultDocument,
+  createEmptyDocument,
   deserializeDocument,
   extractiveSynthesis,
   serializeDocument,
@@ -11,6 +12,18 @@ import {
 import { defaultSettings } from './settings'
 
 describe('versioned canvas document', () => {
+  it('creates a valid empty day without carrying fixture content', () => {
+    const document = createEmptyDocument()
+
+    expect(document.cells).toHaveLength(1)
+    expect(document.cells[0].text).toBe('')
+    expect(document.cells[0].incubation.state).toBe('empty')
+    expect(document.groups).toEqual([])
+    expect(document.relationships).toEqual([])
+    expect(document.layout.listOrder).toEqual([document.cells[0].id])
+    expect(() => validateDocument(document)).not.toThrow()
+  })
+
   it('round-trips deterministically without duplicating relationship data', () => {
     const document = createDefaultDocument()
     document.cells[0].transformation = {

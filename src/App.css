@@ -14,6 +14,21 @@
   background: #000;
 }
 
+.journal-date-rail {
+  position: fixed;
+  z-index: 54;
+  top: max(10px, env(safe-area-inset-top));
+  right: 16px;
+  left: 16px;
+  display: flex;
+  width: calc(100% - 32px);
+  pointer-events: none;
+}
+
+.journal-date-rail .date-rail {
+  pointer-events: auto;
+}
+
 .view-transition-list-out .list-editor {
   z-index: 21;
   transform-origin: var(--view-transition-origin);
@@ -467,7 +482,7 @@
   width: min(680px, calc(100vw - 48px));
   min-height: 100%;
   margin: 0 auto;
-  padding: max(15vh, 92px) 0 150px;
+  padding: max(17vh, 116px) 0 150px;
 }
 
 .list-block {
@@ -664,6 +679,12 @@
 }
 
 @media (max-width: 700px) {
+  .journal-date-rail {
+    right: 8px;
+    left: 8px;
+    width: calc(100% - 16px);
+  }
+
   .tool-dock {
     bottom: max(12px, env(safe-area-inset-bottom));
     max-width: calc(100vw - 24px);

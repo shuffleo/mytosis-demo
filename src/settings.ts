@@ -85,6 +85,9 @@ export interface CanvasSettings {
   group: {
     wallThickness: number
     wallGap: number
+    wallGrainFrequency: number
+    wallGrainOctaves: number
+    wallGrainOpacity: number
     attraction: number
     detachThreshold: number
     attachContactThreshold: number
@@ -96,7 +99,23 @@ export interface CanvasSettings {
     enabled: boolean
     newSelect: boolean
     mergeDistancePx: number
+    proximityPx: number
+    activeZonePx: number
+    activeZoneTint: number
+    activeZoneGrain: number
+    mergeDwellMs: number
+    vibrationAttackMs: number
+    vibrationEasing: 'smooth' | 'spring' | 'linear'
+    cellJitterAmplitudePx: number
+    cellJitterFrequencyHz: number
+    wallJitterAmplitudePx: number
+    wallJitterFrequencyHz: number
+    stickySlowdown: number
     longPressMs: number
+    splitJitterAttackMs: number
+    splitJitterEasing: 'smooth' | 'spring' | 'linear'
+    splitJitterAmplitudePx: number
+    splitJitterFrequencyHz: number
     splitMin: number
     splitMax: number
   }
@@ -147,7 +166,7 @@ export interface CanvasSettings {
   }
 }
 
-export const SETTINGS_SCHEMA_VERSION = 10
+export const SETTINGS_SCHEMA_VERSION = 11
 
 export const defaultSettings: CanvasSettings = {
   schemaVersion: SETTINGS_SCHEMA_VERSION,
@@ -191,7 +210,7 @@ export const defaultSettings: CanvasSettings = {
     textInset: 24,
     wallGrainEnabled: true,
     wallGrain: 0.65,
-    wallGrainFrequency: 0.018,
+    wallGrainFrequency: 0.1,
     wallGrainOctaves: 2,
     wallGrainOpacity: 0.74,
   },
@@ -236,6 +255,9 @@ export const defaultSettings: CanvasSettings = {
   group: {
     wallThickness: 12,
     wallGap: 2,
+    wallGrainFrequency: 0.1,
+    wallGrainOctaves: 2,
+    wallGrainOpacity: 0.74,
     attraction: 0.32,
     detachThreshold: 0.8,
     attachContactThreshold: 2,
@@ -247,7 +269,23 @@ export const defaultSettings: CanvasSettings = {
     enabled: true,
     newSelect: true,
     mergeDistancePx: 58,
+    proximityPx: 72,
+    activeZonePx: 18,
+    activeZoneTint: 0.34,
+    activeZoneGrain: 1.6,
+    mergeDwellMs: 720,
+    vibrationAttackMs: 180,
+    vibrationEasing: 'smooth',
+    cellJitterAmplitudePx: 1.4,
+    cellJitterFrequencyHz: 11,
+    wallJitterAmplitudePx: 2.2,
+    wallJitterFrequencyHz: 8,
+    stickySlowdown: 0.22,
     longPressMs: 720,
+    splitJitterAttackMs: 220,
+    splitJitterEasing: 'smooth',
+    splitJitterAmplitudePx: 2,
+    splitJitterFrequencyHz: 12,
     splitMin: 2,
     splitMax: 4,
   },
@@ -319,7 +357,7 @@ export function groupColorFor(settings: CanvasSettings, order: number) {
 export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasSettings {
   if (
     !input ||
-    ![2, 3, 4, 5, 6, 7, 8, 9, SETTINGS_SCHEMA_VERSION].includes(
+    ![2, 3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_SCHEMA_VERSION].includes(
       input.schemaVersion ?? 0,
     )
   ) {

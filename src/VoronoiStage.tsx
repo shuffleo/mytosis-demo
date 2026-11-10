@@ -22,6 +22,7 @@ import {
   type PostProcessDebugSnapshot,
   type PostProcessStatus,
 } from './microscope-postprocess'
+import { deserializeDocument, serializeDocument } from './model'
 import type { CanvasSettings } from './settings'
 import { WallTextureRenderer } from './wall-texture-renderer'
 
@@ -67,6 +68,7 @@ function focusEasing(value: number, easing: CanvasSettings['editFocus']['easing'
 }
 
 interface VoronoiStageProps {
+  initialDocument: string
   mode: CanvasMode
   settings: CanvasSettings
   autoGrowth: boolean
@@ -82,7 +84,10 @@ interface VoronoiStageProps {
 
 export interface VoronoiStageHandle {
   serialize: () => string
+  loadDocument: (serialized: string) => void
   replaceDocument: (serialized: string, command?: string) => void
+  undo: () => string | null
+  redo: () => string | null
   applyClustering: (
     cellIds: readonly string[],
     result: ClusteringResult,
@@ -93,6 +98,7 @@ export interface VoronoiStageHandle {
 }
 
 export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(function VoronoiStage({
+  initialDocument,
   mode,
   settings,
   autoGrowth,
@@ -114,6 +120,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const postProcessorRef = useRef<MicroscopePostProcessor>(null)
   const wallRendererRef = useRef<WallTextureRenderer>(null)
   const initialSettingsRef = useRef(settings)
+  const initialDocumentRef = useRef(initialDocument)
   const settingsRef = useRef(settings)
   const fieldBoundsRef = useRef({ center: { x: 0, y: 0 }, radius: 1 })
   const latestLayoutRef = useRef<EditorLayout | null>(null)
@@ -225,6 +232,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       initialSettingsRef.current,
     )
     engineRef.current = engine
+    engine.load(initialDocumentRef.current)
     const postProcessor = new MicroscopePostProcessor(
       canvas,
       wallTextureCanvas,
@@ -300,7 +308,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       editingRef.current = null
       setEditing(null)
     }
-    engine.setBlocked(blocked || suspended)
+    engine.setBlocked(blocked)
     engine.setClusteringWave(clusteringWave && !suspended)
     engine.setSuspended(suspended)
     postProcessorRef.current?.setSuspended(suspended)
@@ -339,9 +347,38 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   useImperativeHandle(
     forwardedRef,
     () => ({
-      serialize: () => engineRef.current?.serialize() ?? '',
+      serialize: () => {
+        const serialized = engineRef.current?.serialize() ?? ''
+        const active = editingRef.current
+        if (!serialized || !active) return serialized
+        const document = deserializeDocument(serialized)
+        const cell = document.cells.find((candidate) => candidate.id === active.id)
+        if (cell) cell.text = editorRef.current?.value ?? active.value
+        return serializeDocument(document)
+      },
+      loadDocument: (serialized) => {
+        if (focusAnimationFrameRef.current !== null) {
+          cancelAnimationFrame(focusAnimationFrameRef.current)
+          focusAnimationFrameRef.current = null
+        }
+        editingRef.current = null
+        focusProgressRef.current = 0
+        setEditing(null)
+        setFocusExiting(false)
+        setFocusPhase('idle')
+        setFocusLayout(null)
+        engineRef.current?.load(serialized)
+      },
       replaceDocument: (serialized, command) =>
         engineRef.current?.replaceDocument(serialized, command),
+      undo: () => {
+        const engine = engineRef.current
+        return engine?.undo() ? engine.serialize() : null
+      },
+      redo: () => {
+        const engine = engineRef.current
+        return engine?.redo() ? engine.serialize() : null
+      },
       applyClustering: (cellIds, result) =>
         engineRef.current?.applyClustering(cellIds, result) ?? false,
       snapshot: () => engineRef.current?.getSnapshot() ?? null,

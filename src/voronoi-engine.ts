@@ -32,6 +32,12 @@ import { reflectiveContentProvider } from './reflective-content'
 import { cloneSettings, groupColorFor, type CanvasSettings } from './settings'
 import { seedExpiryScale } from './seed-expiry'
 import { layoutTextInPolygon, measureTextRequirement } from './text-layout'
+import {
+  easeInteraction,
+  mergeVibrationState,
+  proximityExcitement,
+  splitJitterState,
+} from './interaction-effects'
 
 export type CanvasMode = 'add' | 'select' | 'group' | 'merge'
 
@@ -127,6 +133,7 @@ interface GroupResizeGesture {
 interface MergeIntent {
   startedAt: number
   origin: Point2
+  pointer: Point2
   moved: boolean
   candidateId: string | null
   candidateSince: number | null
@@ -162,6 +169,14 @@ interface InteractionState {
   acquiringGroupId: string | null
   gesture: Gesture | null
   preview: PreviewCell | null
+}
+
+interface InteractionVisualEffect {
+  cellJitterPx: number
+  wallJitterPx: number
+  frequencyHz: number
+  tint: number
+  grainBoost: number
 }
 
 interface ItemData {
@@ -209,7 +224,7 @@ export interface WallRenderSnapshot {
   width: number
   height: number
   field: { center: Point2; radius: number }
-  cells: Array<{ id: string; points: Point2[] }>
+  cells: Array<{ id: string; points: Point2[]; grainBoost: number }>
   groups: Array<{ id: string; points: Point2[]; color: string }>
 }
 
@@ -242,6 +257,7 @@ export interface VoronoiDebugSnapshot {
   textLayouts: Record<string, { engine: 'pretext' | 'fallback'; lineCount: number }>
   stickyBridges: number
   mergeCandidateId: string | null
+  interactionEffects: Record<string, InteractionVisualEffect>
   history: { undoDepth: number; redoDepth: number }
   gesture: {
     kind: string
@@ -318,6 +334,7 @@ export class VoronoiCanvasEngine {
   private readonly groupSlotLayouts = new Map<string, GroupSlotLayout>()
   private readonly groupTextFloors = new Map<string, GroupTextFloor>()
   private readonly textWeightBoost = new Map<string, number>()
+  private readonly interactionEffects = new Map<string, InteractionVisualEffect>()
   private readonly textRequirementState = new Map<
     string,
     { requiredArea: number; actualArea: number; fits: boolean }
@@ -919,6 +936,12 @@ export class VoronoiCanvasEngine {
           : this.state.gesture
             ? this.mergeIntentFor(this.state.gesture)?.targetId ?? null
             : null,
+      interactionEffects: Object.fromEntries(
+        [...this.interactionEffects.entries()].map(([id, effect]) => [
+          id,
+          { ...effect },
+        ]),
+      ),
       history: this.history.depths,
       gesture: this.state.gesture
         ? {
@@ -2304,6 +2327,7 @@ export class VoronoiCanvasEngine {
     return {
       startedAt: this.lastFrameTime,
       origin: { ...cell.site },
+      pointer: this.pixelFromSite(cell.site),
       moved: false,
       candidateId: null,
       candidateSince: null,
@@ -2326,11 +2350,11 @@ export class VoronoiCanvasEngine {
   ) {
     const intent = gesture.mergeIntent
     if (!intent) return
+    intent.pointer = { ...pointer }
     intent.moved =
       intent.moved ||
       distance(this.pixelFromSite(intent.origin), this.pixelFromSite(cell.site)) > 5
     if (!intent.moved) return
-    const thresholdPx = Math.min(32, this.settings.mergeSplit.mergeDistancePx)
     const target = this.model.cells
       .filter(
         (candidate) =>
@@ -2346,18 +2370,20 @@ export class VoronoiCanvasEngine {
         const centerDistance = center
           ? distance(pointer, center)
           : Number.POSITIVE_INFINITY
+        const edgeDistance =
+          polygon?.length && pointInPolygon(pointer, polygon)
+            ? 0
+            : polygon?.length
+              ? distanceToPolygonEdges(pointer, polygon)
+              : Number.POSITIVE_INFINITY
         const deepVisibleContact =
           Boolean(polygon?.length) &&
-          pointInPolygon(pointer, polygon!) &&
-          centerDistance <= Math.max(12, equivalentRadius * 0.58)
-        const siteDistancePx =
-          distance(candidate.site, cell.site) * Math.max(1, this.fieldRadius)
-        const siteThreshold =
-          thresholdPx * (intent.targetId === candidate.id ? 1.35 : 1)
-        if (!deepVisibleContact && siteDistancePx > siteThreshold) return null
+          edgeDistance <= this.settings.mergeSplit.activeZonePx &&
+          centerDistance <= Math.max(12, equivalentRadius + this.settings.mergeSplit.activeZonePx)
+        if (!deepVisibleContact) return null
         return {
           candidate,
-          score: deepVisibleContact ? centerDistance : 1000 + siteDistancePx,
+          score: centerDistance,
         }
       })
       .filter(
@@ -2378,11 +2404,6 @@ export class VoronoiCanvasEngine {
       intent.candidateId = candidateId
       intent.candidateSince = candidateId ? this.lastFrameTime : null
       intent.targetId = null
-    } else if (candidateId && intent.targetId === null) {
-      // The dwell starts only after the pointer settles near a candidate.
-      // Slow drags must not accidentally satisfy the hold threshold merely
-      // because several move events took a long time to render.
-      intent.candidateSince = this.lastFrameTime
     }
   }
 
@@ -2407,10 +2428,144 @@ export class VoronoiCanvasEngine {
       intent.moved &&
       intent.candidateId &&
       intent.candidateSince !== null &&
-      (time - intent.candidateSince) * 1000 >= this.settings.mergeSplit.longPressMs
+      (time - intent.candidateSince) * 1000 >= this.settings.mergeSplit.mergeDwellMs
     ) {
       intent.targetId = intent.candidateId
     }
+  }
+
+  private setInteractionEffect(
+    cellId: string,
+    patch: Partial<InteractionVisualEffect>,
+  ) {
+    const current = this.interactionEffects.get(cellId) ?? {
+      cellJitterPx: 0,
+      wallJitterPx: 0,
+      frequencyHz: 0,
+      tint: 0,
+      grainBoost: 1,
+    }
+    this.interactionEffects.set(cellId, {
+      cellJitterPx: Math.max(current.cellJitterPx, patch.cellJitterPx ?? 0),
+      wallJitterPx: Math.max(current.wallJitterPx, patch.wallJitterPx ?? 0),
+      frequencyHz: Math.max(current.frequencyHz, patch.frequencyHz ?? 0),
+      tint: Math.max(current.tint, patch.tint ?? 0),
+      grainBoost: Math.max(current.grainBoost, patch.grainBoost ?? 1),
+    })
+  }
+
+  private updateInteractionEffects(time: number) {
+    this.interactionEffects.clear()
+    const gesture = this.state.gesture
+    if (!gesture || !('cellId' in gesture)) return
+    const source = this.findCell(gesture.cellId)
+    if (!source) return
+    const intent = this.mergeIntentFor(gesture)
+    const splitStartedAt = gesture.kind === 'merge' ? gesture.startedAt : intent?.startedAt
+    const splitMoved = gesture.kind === 'merge' ? gesture.moved : intent?.moved
+    if (splitStartedAt !== undefined && !splitMoved) {
+      const amplitude = splitJitterState({
+        elapsedMs: (time - splitStartedAt) * 1000,
+        attackMs: this.settings.mergeSplit.splitJitterAttackMs,
+        easing: this.settings.mergeSplit.splitJitterEasing,
+        reducedMotion: this.reducedMotion,
+      })
+      this.setInteractionEffect(source.id, {
+        cellJitterPx: this.settings.mergeSplit.splitJitterAmplitudePx * amplitude,
+        wallJitterPx: this.settings.mergeSplit.splitJitterAmplitudePx * amplitude,
+        frequencyHz: this.settings.mergeSplit.splitJitterFrequencyHz,
+      })
+      return
+    }
+    if (!intent?.moved) return
+
+    for (const candidate of this.model.cells) {
+      if (
+        candidate.id === source.id ||
+        candidate.kind !== 'journal' ||
+        candidate.groupId !== source.groupId
+      ) {
+        continue
+      }
+      const polygon = this.visuals.get(candidate.id)?.currentPoints
+      if (!polygon?.length) continue
+      const distancePx = pointInPolygon(intent.pointer, polygon)
+        ? 0
+        : distanceToPolygonEdges(intent.pointer, polygon)
+      const excitement = easeInteraction(
+        proximityExcitement(
+          distancePx,
+          this.settings.mergeSplit.proximityPx,
+          this.settings.mergeSplit.activeZonePx,
+        ),
+        this.settings.mergeSplit.vibrationEasing,
+      )
+      if (excitement <= 0) continue
+      this.setInteractionEffect(candidate.id, {
+        wallJitterPx:
+          this.reducedMotion || intent.targetId
+            ? 0
+            : this.settings.mergeSplit.wallJitterAmplitudePx * excitement,
+        frequencyHz: this.settings.mergeSplit.wallJitterFrequencyHz,
+        tint: this.settings.mergeSplit.activeZoneTint * excitement,
+        grainBoost:
+          1 + (this.settings.mergeSplit.activeZoneGrain - 1) * excitement,
+      })
+    }
+
+    if (!intent.candidateId || intent.candidateSince === null) return
+    const vibration = mergeVibrationState({
+      elapsedMs: (time - intent.candidateSince) * 1000,
+      dwellMs: this.settings.mergeSplit.mergeDwellMs,
+      attackMs: this.settings.mergeSplit.vibrationAttackMs,
+      easing: this.settings.mergeSplit.vibrationEasing,
+      stickySlowdown: this.settings.mergeSplit.stickySlowdown,
+      reducedMotion: this.reducedMotion,
+    })
+    const frequency = this.settings.mergeSplit.cellJitterFrequencyHz * vibration.frequencyScale
+    for (const cellId of [source.id, intent.candidateId]) {
+      this.setInteractionEffect(cellId, {
+        cellJitterPx:
+          this.settings.mergeSplit.cellJitterAmplitudePx * vibration.amplitude,
+        wallJitterPx:
+          this.settings.mergeSplit.wallJitterAmplitudePx * vibration.amplitude,
+        frequencyHz: frequency,
+      })
+      const synchronized = this.interactionEffects.get(cellId)
+      if (synchronized) synchronized.frequencyHz = frequency
+    }
+  }
+
+  private applyInteractionEffect(
+    points: readonly Point2[],
+    cellId: string,
+    time: number,
+  ) {
+    const effect = this.interactionEffects.get(cellId)
+    if (
+      !effect ||
+      (effect.cellJitterPx <= 0.001 && effect.wallJitterPx <= 0.001)
+    ) {
+      return points.map((point) => ({ ...point }))
+    }
+    const center = polygonCentroid(points)
+    const phase = time * Math.PI * 2 * Math.max(0.01, effect.frequencyHz)
+    const translation = {
+      x: Math.sin(phase) * effect.cellJitterPx,
+      y: Math.cos(phase * 0.93) * effect.cellJitterPx * 0.72,
+    }
+    return points.map((point, index) => {
+      const dx = point.x - center.x
+      const dy = point.y - center.y
+      const magnitude = Math.hypot(dx, dy) || 1
+      const wallOffset =
+        Math.sin(phase + (index / Math.max(1, points.length)) * Math.PI * 10) *
+        effect.wallJitterPx
+      return {
+        x: point.x + translation.x + (dx / magnitude) * wallOffset,
+        y: point.y + translation.y + (dy / magnitude) * wallOffset,
+      }
+    })
   }
 
   private render(time: number) {
@@ -2423,6 +2578,7 @@ export class VoronoiCanvasEngine {
     this.lastFrameTime = time
     this.updateFieldBounds()
     this.updateMergeLongPress(time)
+    this.updateInteractionEffects(time)
     this.updateGroupAttachDwell(time * 1000)
     this.applyGroupAttraction(delta)
     this.updateIncubation(time * 1000)
@@ -2714,11 +2870,21 @@ export class VoronoiCanvasEngine {
       if (rounded.length < 3) continue
       activeIds.add(cell.id)
       visual.preview = preview
-      visual.targetPoints = stableSamplePolygon(rounded, SAMPLE_COUNT, visual.targetPoints)
-      visual.targetInnerPoints = stableSamplePolygon(
+      const stablePoints = stableSamplePolygon(
+        rounded,
+        SAMPLE_COUNT,
+        visual.targetPoints,
+      )
+      const stableInnerPoints = stableSamplePolygon(
         rounded,
         SAMPLE_COUNT,
         visual.targetInnerPoints,
+      )
+      visual.targetPoints = this.applyInteractionEffect(stablePoints, cell.id, time)
+      visual.targetInnerPoints = this.applyInteractionEffect(
+        stableInnerPoints,
+        cell.id,
+        time,
       )
       visual.targetOpacity = preview ? 0.82 : 1
       const requiredArea = (textRequirements.get(cell.id) ?? 0) * this.crowdingScale
@@ -2764,6 +2930,7 @@ export class VoronoiCanvasEngine {
         .map(([id, visual]) => ({
           id,
           points: visual.currentPoints.map((point) => ({ ...point })),
+          grainBoost: this.interactionEffects.get(id)?.grainBoost ?? 1,
         })),
       groups: [...this.groupVisuals.entries()]
         .filter(([, visual]) => visual.currentPoints.length >= 3)
@@ -3536,6 +3703,14 @@ export class VoronoiCanvasEngine {
   private cellDisplayColor(cell: CellEntity | PreviewCell, visual: CellVisual) {
     const base = this.cellBaseColor(cell)
     if (visual.preview) return this.mixColor(base, this.settings.palette.hoverTint, 0.48)
+    const interactionTint = this.interactionEffects.get(cell.id)?.tint ?? 0
+    if (interactionTint > 0) {
+      return this.mixColor(
+        base,
+        this.settings.palette.selectedTint,
+        interactionTint,
+      )
+    }
     if (cell.id === this.state.selectedCellId) {
       return this.mixColor(base, this.settings.palette.selectedTint, 0.48)
     }
