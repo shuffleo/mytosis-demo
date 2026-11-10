@@ -34,6 +34,20 @@ export function ListEditor({ document, onChange, onCommit }: ListEditorProps) {
     })
   }, [document])
 
+  useEffect(() => {
+    if (rows.length !== 1) return
+    const cell = document.cells.find((candidate) => candidate.id === rows[0].cellId)
+    if (!cell || cell.text.trim()) return
+    const editor = globalThis.document.querySelector<HTMLTextAreaElement>(
+      `[data-list-cell="${CSS.escape(cell.id)}"]`,
+    )
+    if (!editor || globalThis.document.activeElement === editor) return
+    requestAnimationFrame(() => {
+      editor.focus()
+      editor.setSelectionRange(editor.value.length, editor.value.length)
+    })
+  }, [document, rows])
+
   const focusAdjacent = (cellId: string, direction: -1 | 1, caret: number) => {
     const currentIndex = rows.findIndex((row) => row.cellId === cellId)
     const target = rows[currentIndex + direction]

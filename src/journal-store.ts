@@ -48,6 +48,7 @@ export interface JournalStore {
   hasContent(dayKey: DayKey): boolean
   listDayKeys(): DayKey[]
   contentDayKeys(): Set<DayKey>
+  clearAll(): void
 }
 
 export class JournalStoreVersionError extends Error {
@@ -296,6 +297,16 @@ export function createJournalStore(options: JournalStoreOptions = {}): JournalSt
           return document ? documentHasJournalContent(document) : false
         }),
       )
+    },
+    clearAll() {
+      const ownedKeys: string[] = []
+      for (let index = 0; index < storage.length; index += 1) {
+        const key = storage.key(index)
+        if (key === storageKey || key?.startsWith(`${storageKey}:`)) {
+          ownedKeys.push(key)
+        }
+      }
+      for (const key of ownedKeys) storage.removeItem(key)
     },
   }
 }

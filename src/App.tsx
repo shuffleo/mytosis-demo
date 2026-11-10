@@ -294,6 +294,37 @@ function App() {
     setHistoryState({ canUndo: false, canRedo: false })
     stageRef.current?.loadDocument(serialized)
   }
+  const startAnew = () => {
+    if (
+      !window.confirm(
+        'Erase every saved journal page on this device and restore the starter journal?',
+      )
+    ) {
+      return
+    }
+    clusterAbortRef.current?.abort()
+    journalSession.store.clearAll()
+    const nextDayKey = toLocalDayKey(new Date())
+    const nextDocument = createDefaultDocument()
+    const serialized = serializeDocument(nextDocument)
+    journalSession.store.savePage(nextDayKey, nextDocument)
+    lastSavedRef.current.clear()
+    lastSavedRef.current.set(nextDayKey, serialized)
+    selectedDayKeyRef.current = nextDayKey
+    listDocumentRef.current = deserializeDocument(serialized)
+    settingsRef.current = cloneSettings(nextDocument.settings)
+    setSelectedDayKey(nextDayKey)
+    setListDocument(deserializeDocument(serialized))
+    setListDirty(false)
+    setSettings(cloneSettings(nextDocument.settings))
+    setContentDayKeys(journalSession.store.contentDayKeys())
+    setHistoryState({ canUndo: false, canRedo: false })
+    setMode('add')
+    setFocusedEditing(false)
+    setPanelOpen(false)
+    setView('list')
+    stageRef.current?.loadDocument(serialized)
+  }
   useEffect(() => {
     selectedDayKeyRef.current = selectedDayKey
     listDocumentRef.current = listDocument
@@ -487,6 +518,7 @@ function App() {
         onPostProcessingStatus={setPostProcessingStatus}
         onHistoryChanged={handleHistoryChanged}
         onEditingChanged={setFocusedEditing}
+        onModeChanged={setMode}
       />
       {view === 'list' && listDocument && (
         <ListEditor
@@ -678,6 +710,7 @@ function App() {
             onChange={updateSettings}
             onAddSeed={() => setSeedAuditRequest((request) => request + 1)}
             onDieSeed={() => stageRef.current?.dieFirstSeed()}
+            onStartAnew={startAnew}
           />
         </aside>
       )}

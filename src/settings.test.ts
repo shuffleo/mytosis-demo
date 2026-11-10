@@ -1,5 +1,30 @@
 import { describe, expect, it } from 'vitest'
-import { defaultSettings, groupColorFor, migrateSettings } from './settings'
+import {
+  defaultSettings,
+  groupColorFor,
+  identifyPalettePreset,
+  migrateSettings,
+  palettePresetById,
+  PALETTE_PRESETS,
+} from './settings'
+
+function contrastRatio(foreground: string, background: string) {
+  const luminance = (color: string) => {
+    const channels = color
+      .slice(1)
+      .match(/.{2}/gu)!
+      .map((channel) => Number.parseInt(channel, 16) / 255)
+      .map((channel) =>
+        channel <= 0.04045
+          ? channel / 12.92
+          : ((channel + 0.055) / 1.055) ** 2.4,
+      )
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+  }
+  const first = luminance(foreground)
+  const second = luminance(background)
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+}
 
 describe('refined control defaults', () => {
   it('uses the exact requested fresh values', () => {
@@ -11,9 +36,9 @@ describe('refined control defaults', () => {
       textInset: 24,
       wallGrainEnabled: true,
       wallGrain: 0.65,
-      wallGrainFrequency: 0.1,
-      wallGrainOctaves: 2,
-      wallGrainOpacity: 0.74,
+      wallGrainFrequency: 2.4,
+      wallGrainOctaves: 1,
+      wallGrainOpacity: 0.64,
     })
     expect(defaultSettings.particles).toEqual({
       enabled: true,
@@ -29,6 +54,11 @@ describe('refined control defaults', () => {
       hoverPeriodMs: 3360,
       hoverAttackMs: 300,
       morphResponse: 32,
+      ambientEnabled: true,
+      ambientAmplitudePx: 0.58,
+      ambientPeriodMs: 6200,
+      ambientPhaseSpread: 0.42,
+      ambientCoverage: 0.72,
     })
     expect(defaultSettings.seed).toMatchObject({
       delayMinMs: 4800,
@@ -156,7 +186,7 @@ describe('refined control defaults', () => {
     })
     expect(migrated.geometry.seamGap).toBe(18)
     expect(migrated.effects).toEqual(defaultSettings.effects)
-    expect(migrated.schemaVersion).toBe(11)
+    expect(migrated.schemaVersion).toBe(12)
     expect(migrated.seed.expirySeconds).toBe(180)
     expect(migrated.clustering.autoK).toBe(true)
   })
@@ -170,7 +200,7 @@ describe('refined control defaults', () => {
     legacy.effects.vignette.grain = 0
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(11)
+    expect(migrated.schemaVersion).toBe(12)
     expect(migrated.effects.vignette.grain).toBe(0)
     expect(migrated.effects.lens.glow).toBe(0.2)
     expect(migrated.effects.lens.glowRadius).toBe(2.5)
@@ -183,7 +213,7 @@ describe('refined control defaults', () => {
     delete (legacy.geometry as Partial<typeof legacy.geometry>).wallGrain
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(11)
+    expect(migrated.schemaVersion).toBe(12)
     expect(migrated.effects.circle.grain).toBe(0.04)
     expect(migrated.geometry.wallGrain).toBe(0.65)
   })
@@ -208,7 +238,7 @@ describe('refined control defaults', () => {
     delete (legacy.palette as Partial<typeof legacy.palette>).group8
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(11)
+    expect(migrated.schemaVersion).toBe(12)
     expect(migrated.geometry.wallGrainEnabled).toBe(true)
     expect(migrated.particles).toEqual(defaultSettings.particles)
     expect(migrated.editFocus).toEqual(defaultSettings.editFocus)
@@ -224,7 +254,7 @@ describe('refined control defaults', () => {
     delete (legacy.editFocus as Partial<typeof legacy.editFocus>).arcDepth
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(11)
+    expect(migrated.schemaVersion).toBe(12)
     expect(migrated.editFocus.trackTransitionEnabled).toBe(true)
     expect(migrated.editFocus.arcDepth).toBe(1.8)
   })
@@ -241,7 +271,7 @@ describe('refined control defaults', () => {
     ).splitJitterAmplitudePx
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(11)
+    expect(migrated.schemaVersion).toBe(12)
     expect(migrated.group.wallGrainFrequency).toBe(0.1)
     expect(migrated.group.wallGrainOctaves).toBe(2)
     expect(migrated.group.wallGrainOpacity).toBe(0.74)
@@ -253,5 +283,51 @@ describe('refined control defaults', () => {
     expect(groupColorFor(defaultSettings, 1)).toBe(defaultSettings.palette.group1)
     expect(groupColorFor(defaultSettings, 8)).toBe(defaultSettings.palette.group8)
     expect(groupColorFor(defaultSettings, 9)).toBe(defaultSettings.palette.group1)
+  })
+
+  it('migrates version eleven with ambient culture motion defaults', () => {
+    const legacy = structuredClone(defaultSettings)
+    legacy.schemaVersion = 11
+    delete (legacy.motion as Partial<typeof legacy.motion>).ambientEnabled
+    delete (legacy.motion as Partial<typeof legacy.motion>).ambientAmplitudePx
+    delete (legacy.motion as Partial<typeof legacy.motion>).ambientPeriodMs
+    delete (legacy.motion as Partial<typeof legacy.motion>).ambientPhaseSpread
+    delete (legacy.motion as Partial<typeof legacy.motion>).ambientCoverage
+
+    const migrated = migrateSettings(legacy)
+    expect(migrated.schemaVersion).toBe(12)
+    expect(migrated.motion).toMatchObject({
+      ambientEnabled: true,
+      ambientAmplitudePx: 0.58,
+      ambientPeriodMs: 6200,
+      ambientPhaseSpread: 0.42,
+      ambientCoverage: 0.72,
+    })
+  })
+
+  it('keeps cell text WCAG AA readable in every microscope palette', () => {
+    for (const preset of PALETTE_PRESETS) {
+      for (const cellColor of [
+        preset.palette.cellLight,
+        preset.palette.cellMid,
+        preset.palette.cellDark,
+        preset.palette.cellDeep,
+      ]) {
+        expect(
+          contrastRatio(preset.palette.text, cellColor),
+          `${preset.label}: ${preset.palette.text} on ${cellColor}`,
+        ).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
+  it('re-identifies a persisted preset and marks manual color edits custom', () => {
+    const migrated = migrateSettings({
+      ...defaultSettings,
+      palette: structuredClone(palettePresetById('polarized-tide').palette),
+    })
+    expect(identifyPalettePreset(migrated.palette)).toBe('polarized-tide')
+    migrated.palette.cellLight = '#ffffff'
+    expect(identifyPalettePreset(migrated.palette)).toBe('custom')
   })
 })

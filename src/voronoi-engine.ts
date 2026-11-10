@@ -1,4 +1,5 @@
 import paper from 'paper/dist/paper-core'
+import { ambientScaleOffset } from './ambient-motion'
 import {
   circlePolygon,
   clamp,
@@ -40,6 +41,7 @@ import {
 } from './interaction-effects'
 
 export type CanvasMode = 'add' | 'select' | 'group' | 'merge'
+export type EditPresentation = 'focused' | 'inline'
 
 interface CellVisual {
   fillPath: paper.Path
@@ -199,14 +201,21 @@ export interface EditorLayout {
   width: number
   height: number
   polygonWidth: number
+  fontSize: number
   points: Point2[]
   text: string
 }
 
 export interface EngineCallbacks {
-  onEditRequested: (cellId: string, text: string, ghostPrompt: string) => void
+  onEditRequested: (
+    cellId: string,
+    text: string,
+    ghostPrompt: string,
+    presentation: EditPresentation,
+  ) => void
   onEditorLayout: (layout: EditorLayout) => void
   onSelectionChanged: (selection: string | null) => void
+  onModeChanged?: (mode: CanvasMode) => void
   onCanvasChanged?: (field: CanvasFieldBounds, animated: boolean) => void
   onHistoryChanged?: (canUndo: boolean, canRedo: boolean) => void
   onWallFrame?: (snapshot: WallRenderSnapshot) => void
@@ -376,6 +385,8 @@ export class VoronoiCanvasEngine {
   private blocked = false
   private suspended = false
   private clusteringWave = false
+  private editingDraftText: string | null = null
+  private editingPresentation: EditPresentation = 'focused'
   private readonly renderFrame = (event: { time: number }) => this.render(event.time)
 
   private readonly handleDoubleClick = (event: MouseEvent) => {
@@ -694,12 +705,17 @@ export class VoronoiCanvasEngine {
     }
   }
 
-  startEditing(cellId: string) {
+  startEditing(cellId: string, presentation: EditPresentation = 'focused') {
     if (this.blocked) return
     const cell = this.findCell(cellId)
     if (!cell || cell.kind === 'seed') return
-    this.state.mode = 'select'
+    if (this.state.mode !== 'select') {
+      this.state.mode = 'select'
+      this.callbacks.onModeChanged?.('select')
+    }
     this.state.editingId = cellId
+    this.editingDraftText = cell.text
+    this.editingPresentation = presentation
     this.state.gesture = null
     this.selectCell(cellId)
     this.state.hoveredId = null
@@ -707,6 +723,7 @@ export class VoronoiCanvasEngine {
       cellId,
       cell.text,
       reflectiveContentProvider.manualGhostPrompt(cell.creation.order),
+      presentation,
     )
     this.updateCanvasState()
   }
@@ -734,12 +751,35 @@ export class VoronoiCanvasEngine {
       if (!cell.text) enforceSingleEmptyCell(this.model, cell.id)
     }
     this.state.editingId = null
+    this.editingDraftText = null
     this.updateCanvasState()
   }
 
   cancelEditing() {
     this.state.editingId = null
+    this.editingDraftText = null
     this.updateCanvasState()
+  }
+
+  updateEditingDraft(cellId: string, text: string) {
+    if (this.state.editingId !== cellId) return
+    this.editingDraftText = text
+    this.sourceDirtyToken += 1
+    this.updateCanvasState()
+  }
+
+  startEmptySingletonEditing() {
+    const cells = this.model.cells.filter((cell) => cell.kind === 'journal')
+    if (
+      this.blocked ||
+      this.state.editingId ||
+      cells.length !== 1 ||
+      cells[0].text.trim()
+    ) {
+      return false
+    }
+    this.startEditing(cells[0].id, 'inline')
+    return true
   }
 
   serialize() {
@@ -755,6 +795,7 @@ export class VoronoiCanvasEngine {
     this.groupSlotLayouts.clear()
     this.groupTextFloors.clear()
     this.history.clear()
+    this.editingDraftText = null
     this.clearSelection()
     this.notifyHistoryChanged()
   }
@@ -780,7 +821,9 @@ export class VoronoiCanvasEngine {
       x: Math.cos(angle) * radius,
       y: Math.sin(angle) * radius,
     })
-    return Boolean(this.placeEmptyCell(point, 'add-cell-at-centroid'))
+    const cellId = this.placeEmptyCell(point, 'add-cell-at-centroid')
+    if (cellId) this.startEditing(cellId, 'inline')
+    return Boolean(cellId)
   }
 
   forceExpireFirstSeed() {
@@ -1070,10 +1113,17 @@ export class VoronoiCanvasEngine {
     return clamp((requirement.area / fieldArea) + 0.004, 0.006, 0.12)
   }
 
+  private displayTextForCell(cell: CellEntity | PreviewCell) {
+    return this.state.editingId === cell.id && this.editingDraftText !== null
+      ? this.editingDraftText
+      : cell.text
+  }
+
   private currentTextWeightFloor(cell: CellEntity) {
-    if (!cell.text.trim()) return 0
+    const text = this.displayTextForCell(cell)
+    if (!text.trim()) return 0
     const requirement = measureTextRequirement(
-      cell.text,
+      text,
       this.settings.geometry.textInset,
       10,
     )
@@ -1135,7 +1185,8 @@ export class VoronoiCanvasEngine {
     }
 
     if (this.state.mode === 'add') {
-      this.placeEmptyCell(point, 'add-cell')
+      const cellId = this.placeEmptyCell(point, 'add-cell')
+      if (cellId) this.startEditing(cellId, 'inline')
       return
     }
 
@@ -2595,9 +2646,10 @@ export class VoronoiCanvasEngine {
       : this.model.cells
     const textRequirements = new Map<string, number>()
     const totalRequiredArea = this.model.cells.reduce((sum, cell) => {
-      if (!cell.text || cell.kind === 'seed') return sum
+      const text = this.displayTextForCell(cell)
+      if (!text || cell.kind === 'seed') return sum
       const required = measureTextRequirement(
-        cell.text,
+        text,
         this.settings.geometry.textInset,
         10,
       ).area
@@ -2615,7 +2667,8 @@ export class VoronoiCanvasEngine {
     const reservingCellSpace =
       Boolean(this.state.preview) ||
       this.model.cells.some(
-        (cell) => cell.kind === 'journal' && cell.text.trim() === '',
+        (cell) =>
+          cell.kind === 'journal' && this.displayTextForCell(cell).trim() === '',
       )
     // Adding a cell is a real layout constraint, not a decorative overlay.
     // Temporarily relax existing copy floors so neighboring sites can yield a
@@ -2723,10 +2776,41 @@ export class VoronoiCanvasEngine {
         ? Math.sin(time * 5.4 + cell.creation.order * 0.83) *
           (this.reducedMotion ? 0.002 : 0.018)
         : 0
+      const estimatedCellSpan = Math.max(
+        48,
+        this.fieldRadius * Math.sqrt(Math.max(0.002, cell.weight)) * 2,
+      )
+      const ambientPulse =
+        cell.kind === 'journal' &&
+        cell.id !== this.state.editingId &&
+        !this.state.gesture &&
+        !this.clusteringWave
+          ? ambientScaleOffset(
+              cell.creation.order,
+              time,
+              estimatedCellSpan,
+              {
+                enabled: this.settings.motion.ambientEnabled,
+                amplitudePx: this.settings.motion.ambientAmplitudePx,
+                periodMs: this.settings.motion.ambientPeriodMs,
+                phaseSpread: this.settings.motion.ambientPhaseSpread,
+                coverage: this.settings.motion.ambientCoverage,
+              },
+              this.reducedMotion,
+            )
+          : 0
+      const ambientTravelPx = ambientPulse * estimatedCellSpan
+      if (ambientTravelPx !== 0) {
+        const travelAngle = cell.creation.order * 2.399963229728653
+        pixel = {
+          x: pixel.x + Math.cos(travelAngle) * ambientTravelPx,
+          y: pixel.y + Math.sin(travelAngle) * ambientTravelPx,
+        }
+      }
       const combinedScale =
         cell.kind === 'seed'
           ? popMultiplier + clusterPulse
-          : 1 + (breathScale - 1) + clusterPulse
+          : 1 + (breathScale - 1) + clusterPulse + ambientPulse
       this.breathScales.set(cell.id, combinedScale)
 
       let weight = cell.weight
@@ -2948,7 +3032,15 @@ export class VoronoiCanvasEngine {
   private notifyCanvasChanged() {
     if (!this.callbacks.onCanvasChanged) return
     let checksum = 2166136261
-    let timeDynamic = Boolean(this.state.gesture || this.state.hoveredId || this.clusteringWave)
+    let timeDynamic = Boolean(
+      this.state.gesture ||
+        this.state.hoveredId ||
+        this.clusteringWave ||
+        (this.settings.motion.ambientEnabled &&
+          this.settings.motion.ambientAmplitudePx > 0 &&
+          this.settings.motion.ambientCoverage > 0 &&
+          !this.reducedMotion),
+    )
     let dynamic = timeDynamic
     const mix = (value: number, precision = 0.5) => {
       checksum = Math.imul(checksum ^ Math.round(value * precision), 16777619) >>> 0
@@ -3179,8 +3271,9 @@ export class VoronoiCanvasEngine {
       4,
       this.settings.geometry.textInset * Math.sqrt(this.crowdingScale),
     )
+    const displayText = this.displayTextForCell(cell)
     const textLayout = layoutTextInPolygon(
-      cell.text,
+      displayText,
       visual.currentPoints,
       effectiveTextInset,
       minimumFontSize,
@@ -3247,7 +3340,6 @@ export class VoronoiCanvasEngine {
     visual.label.shadowBlur =
       cell.incubation.state === 'incubating' ? this.settings.seed.incubationBlur : 0
     visual.label.visible =
-      this.state.editingId !== cell.id &&
       cell.kind !== 'seed' &&
       polygonArea(visual.currentPoints) > 1000 &&
       textLayout.fits
@@ -3678,15 +3770,26 @@ export class VoronoiCanvasEngine {
     if (!visual || !cell) return
     const center = polygonCentroid(visual.currentPoints)
     const bounds = polygonBounds(visual.currentPoints)
+    const safeRadius = Math.max(
+      1,
+      distanceToPolygonEdges(center, visual.currentPoints) -
+        Math.max(2, this.settings.geometry.textInset * 0.18),
+    )
+    const safeSide =
+      safeRadius *
+      Math.SQRT2 *
+      (this.editingPresentation === 'inline' ? 0.9 : 0.94)
+    const fontSize = Number(visual.lineLabels[0]?.fontSize ?? 10)
     this.callbacks.onEditorLayout({
       cellId: cell.id,
       x: center.x,
       y: center.y,
-      width: clamp(bounds.width * 0.75, 140, 340),
-      height: bounds.height,
+      width: Math.min(bounds.width * 0.82, safeSide),
+      height: Math.min(bounds.height * 0.82, safeSide),
       polygonWidth: bounds.width,
+      fontSize,
       points: visual.currentPoints.map((point) => ({ ...point })),
-      text: cell.text,
+      text: this.displayTextForCell(cell),
     })
   }
 

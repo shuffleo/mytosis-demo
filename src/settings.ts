@@ -59,6 +59,11 @@ export interface CanvasSettings {
     hoverAttackMs: number
     morphResponse: number
     easing: 'smooth' | 'spring' | 'direct'
+    ambientEnabled: boolean
+    ambientAmplitudePx: number
+    ambientPeriodMs: number
+    ambientPhaseSpread: number
+    ambientCoverage: number
   }
   seed: {
     delayMinMs: number
@@ -166,7 +171,7 @@ export interface CanvasSettings {
   }
 }
 
-export const SETTINGS_SCHEMA_VERSION = 11
+export const SETTINGS_SCHEMA_VERSION = 12
 
 export const defaultSettings: CanvasSettings = {
   schemaVersion: SETTINGS_SCHEMA_VERSION,
@@ -210,9 +215,9 @@ export const defaultSettings: CanvasSettings = {
     textInset: 24,
     wallGrainEnabled: true,
     wallGrain: 0.65,
-    wallGrainFrequency: 0.1,
-    wallGrainOctaves: 2,
-    wallGrainOpacity: 0.74,
+    wallGrainFrequency: 2.4,
+    wallGrainOctaves: 1,
+    wallGrainOpacity: 0.64,
   },
   particles: {
     enabled: true,
@@ -229,6 +234,11 @@ export const defaultSettings: CanvasSettings = {
     hoverAttackMs: 300,
     morphResponse: 32,
     easing: 'smooth',
+    ambientEnabled: true,
+    ambientAmplitudePx: 0.58,
+    ambientPeriodMs: 6200,
+    ambientPhaseSpread: 0.42,
+    ambientCoverage: 0.72,
   },
   seed: {
     delayMinMs: 4800,
@@ -336,6 +346,157 @@ export const defaultSettings: CanvasSettings = {
   },
 }
 
+export type PalettePresetId =
+  | 'baseline'
+  | 'botanical-stain'
+  | 'chloroplast-amber'
+  | 'polarized-tide'
+  | 'organelle-night'
+
+export interface PalettePreset {
+  id: PalettePresetId
+  label: string
+  description: string
+  palette: CanvasSettings['palette']
+}
+
+const baselinePalette = cloneSettings(defaultSettings).palette
+
+export const PALETTE_PRESETS: readonly PalettePreset[] = [
+  {
+    id: 'baseline',
+    label: 'Baseline · Graphite culture',
+    description: 'The neutral graphite microscope palette.',
+    palette: baselinePalette,
+  },
+  {
+    id: 'botanical-stain',
+    label: 'Botanical stain · Cyan / carmine',
+    description: 'Warm specimen paper with cyan and carmine histology stains.',
+    palette: {
+      cellLight: '#f7ead9',
+      cellMid: '#f0ddc8',
+      cellDark: '#e7cfb9',
+      cellDeep: '#dcc1aa',
+      innerStroke: '#fff5e9',
+      seam: '#35202e',
+      handles: '#fff8ee',
+      text: '#241922',
+      selectedTint: '#89c6c7',
+      hoverTint: '#e9b5bd',
+      groupTint: '#177f88',
+      group1: '#177f88',
+      group2: '#a43462',
+      group3: '#338c9b',
+      group4: '#bd5b76',
+      group5: '#5aa3a1',
+      group6: '#8c365f',
+      group7: '#236f85',
+      group8: '#c4717f',
+      interior: '#4d263d',
+      exterior: '#120d16',
+    },
+  },
+  {
+    id: 'chloroplast-amber',
+    label: 'Chloroplast amber · Moss / gold',
+    description: 'Olive chloroplast forms suspended in amber microscope light.',
+    palette: {
+      cellLight: '#eee9c9',
+      cellMid: '#e4ddb5',
+      cellDark: '#d7cea0',
+      cellDeep: '#cbc08a',
+      innerStroke: '#fff7d7',
+      seam: '#252416',
+      handles: '#fffbe5',
+      text: '#1b2117',
+      selectedTint: '#9dad59',
+      hoverTint: '#d7c477',
+      groupTint: '#61752b',
+      group1: '#61752b',
+      group2: '#876b32',
+      group3: '#5a733f',
+      group4: '#9a7c3d',
+      group5: '#466d3d',
+      group6: '#aa8748',
+      group7: '#73883c',
+      group8: '#73552f',
+      interior: '#332d1d',
+      exterior: '#0d0d09',
+    },
+  },
+  {
+    id: 'polarized-tide',
+    label: 'Polarized tide · Aqua / pearl',
+    description: 'Cool aqua cells with the iridescent edges of polarized tissue.',
+    palette: {
+      cellLight: '#e3f1ed',
+      cellMid: '#d3e9e5',
+      cellDark: '#c2dedc',
+      cellDeep: '#b0d2d2',
+      innerStroke: '#f5fffc',
+      seam: '#123340',
+      handles: '#f2fffd',
+      text: '#102a32',
+      selectedTint: '#71bbb7',
+      hoverTint: '#a7d8d3',
+      groupTint: '#267f87',
+      group1: '#267f87',
+      group2: '#6a65a9',
+      group3: '#398d73',
+      group4: '#7e5d91',
+      group5: '#367fa5',
+      group6: '#a3657f',
+      group7: '#3f9298',
+      group8: '#5e6f9d',
+      interior: '#183b49',
+      exterior: '#071318',
+    },
+  },
+  {
+    id: 'organelle-night',
+    label: 'Organelle night · Violet / viridian',
+    description: 'A fluorescence-inspired dark field with restrained organelle color.',
+    palette: {
+      cellLight: '#34434a',
+      cellMid: '#303b48',
+      cellDark: '#382f46',
+      cellDeep: '#282d39',
+      innerStroke: '#61736f',
+      seam: '#0a0f12',
+      handles: '#f7edda',
+      text: '#fff2dc',
+      selectedTint: '#416f70',
+      hoverTint: '#4c5969',
+      groupTint: '#498f78',
+      group1: '#498f78',
+      group2: '#825b9e',
+      group3: '#5b8ba5',
+      group4: '#9a5d78',
+      group5: '#6e985c',
+      group6: '#a17a48',
+      group7: '#5470a4',
+      group8: '#8a617d',
+      interior: '#151b20',
+      exterior: '#030607',
+    },
+  },
+] as const
+
+export function palettePresetById(id: PalettePresetId) {
+  return PALETTE_PRESETS.find((preset) => preset.id === id) ?? PALETTE_PRESETS[0]
+}
+
+export function identifyPalettePreset(
+  palette: CanvasSettings['palette'],
+): PalettePresetId | 'custom' {
+  const serialized = JSON.stringify(palette)
+  return (
+    PALETTE_PRESETS.find((preset) => JSON.stringify(preset.palette) === serialized)?.id ??
+    'custom'
+  )
+}
+
 export function cloneSettings(settings: CanvasSettings = defaultSettings): CanvasSettings {
   return structuredClone(settings)
 }
@@ -357,7 +518,7 @@ export function groupColorFor(settings: CanvasSettings, order: number) {
 export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasSettings {
   if (
     !input ||
-    ![2, 3, 4, 5, 6, 7, 8, 9, 10, SETTINGS_SCHEMA_VERSION].includes(
+    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, SETTINGS_SCHEMA_VERSION].includes(
       input.schemaVersion ?? 0,
     )
   ) {

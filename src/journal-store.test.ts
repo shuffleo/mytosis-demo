@@ -194,4 +194,21 @@ describe('versioned day journal store', () => {
     loaded.cells[0].text = 'Mutated in memory'
     expect(store.loadPage('2026-11-10')?.cells[0].text).toBe('Content')
   })
+
+  it('clears only journal-owned pages, recovery data, and migration backups', () => {
+    const storage = new MemoryStorage()
+    const store = createJournalStore({ storage })
+    store.savePage('2026-11-10', documentWithFirstText('Reset me'))
+    storage.setItem(`${JOURNAL_STORAGE_KEY}:recovery:2026-11-10`, 'recovery')
+    storage.setItem(`${JOURNAL_STORAGE_KEY}:legacy-backup`, 'backup')
+    storage.setItem('another.app.preference', 'keep me')
+
+    store.clearAll()
+
+    expect(store.listDayKeys()).toEqual([])
+    expect(storage.getItem(`${JOURNAL_STORAGE_KEY}:page:2026-11-10`)).toBeNull()
+    expect(storage.getItem(`${JOURNAL_STORAGE_KEY}:recovery:2026-11-10`)).toBeNull()
+    expect(storage.getItem(`${JOURNAL_STORAGE_KEY}:legacy-backup`)).toBeNull()
+    expect(storage.getItem('another.app.preference')).toBe('keep me')
+  })
 })

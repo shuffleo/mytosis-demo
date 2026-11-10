@@ -44,6 +44,26 @@ async function nearestPastDay(page: Page, todayKey: string): Promise<Locator> {
   throw new Error('No past day is available in the date rail')
 }
 
+function contrastRatio(foreground: string, background: string) {
+  const channels = (color: string) =>
+    color.match(/\d+(?:\.\d+)?/gu)!.slice(0, 3).map(Number)
+  const luminance = (color: string) =>
+    channels(color)
+      .map((channel) => channel / 255)
+      .map((channel) =>
+        channel <= 0.04045
+          ? channel / 12.92
+          : ((channel + 0.055) / 1.055) ** 2.4,
+      )
+      .reduce(
+        (sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index],
+        0,
+      )
+  const first = luminance(foreground)
+  const second = luminance(background)
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
   await expect(page.getByTestId('list-view')).toBeVisible()
@@ -63,6 +83,55 @@ test('starts in list view and presents local-day date states', async ({ page }) 
 
   const emptyPast = await nearestPastDay(page, todayKey)
   await expect(emptyPast.locator('..')).toHaveCSS('opacity', '0.6')
+
+  const railGeometry = await page.getByTestId('date-rail').evaluate((rail) => {
+    const month = rail.querySelector('.date-rail__month')!.getBoundingClientRect()
+    const days = rail.querySelector('.date-rail__days')!.getBoundingClientRect()
+    return {
+      groupCenter: (month.left + days.right) / 2,
+      viewportCenter: window.innerWidth / 2,
+    }
+  })
+  expect(Math.abs(railGeometry.groupCenter - railGeometry.viewportCenter)).toBeLessThan(3)
+
+  const selected = page.locator('.date-rail__day button[aria-pressed="true"]')
+  await selected.hover()
+  const selectedColors = await selected.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { color: style.color, background: style.backgroundColor }
+  })
+  expect(contrastRatio(selectedColors.color, selectedColors.background)).toBeGreaterThanOrEqual(
+    4.5,
+  )
+
+  await page.getByTestId('return-microscope').click()
+  await expect(page.getByTestId('voronoi-canvas')).toBeVisible()
+  await expect(page.getByTestId('date-rail')).toHaveAttribute(
+    'data-theme',
+    'microscope',
+  )
+  const microscopeGeometry = await page.getByTestId('date-rail').evaluate((rail) => {
+    const month = rail.querySelector('.date-rail__month')!.getBoundingClientRect()
+    const days = rail.querySelector('.date-rail__days')!.getBoundingClientRect()
+    return {
+      groupCenter: (month.left + days.right) / 2,
+      viewportCenter: window.innerWidth / 2,
+    }
+  })
+  expect(Math.abs(microscopeGeometry.groupCenter - microscopeGeometry.viewportCenter)).toBeLessThan(
+    3,
+  )
+  const microscopeSelected = page.locator(
+    '.date-rail__day button[aria-pressed="true"]',
+  )
+  await microscopeSelected.hover()
+  const microscopeColors = await microscopeSelected.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { color: style.color, background: style.backgroundColor }
+  })
+  expect(
+    contrastRatio(microscopeColors.color, microscopeColors.background),
+  ).toBeGreaterThanOrEqual(4.5)
 })
 
 test('preserves independent pages when switching dates', async ({ page }) => {
@@ -74,6 +143,7 @@ test('preserves independent pages when switching dates', async ({ page }) => {
   await past.click()
   const pastEditor = page.locator('[data-list-cell]').first()
   await expect(pastEditor).toHaveValue('')
+  await expect(pastEditor).toBeFocused()
   await pastEditor.fill('A note that belongs only to this earlier day.')
   await page.getByTestId('date-calendar-trigger').click()
   await page.keyboard.press('Escape')
@@ -89,6 +159,39 @@ test('preserves independent pages when switching dates', async ({ page }) => {
   await expect(page.locator('[data-list-cell]').first()).toHaveValue(
     'A note that belongs only to this earlier day.',
   )
+})
+
+test('clears persisted journal pages with the confirmation-backed sidebar reset', async ({
+  page,
+}) => {
+  const todayKey = await selectedDayKey(page)
+  const past = await nearestPastDay(page, todayKey)
+  const pastKey = await past.getAttribute('data-day-key')
+  if (!pastKey) throw new Error('Past day key is missing')
+  await past.click()
+  await page.locator('[data-list-cell]').first().fill('Temporary local journal data.')
+  await page.getByTestId('date-calendar-trigger').click()
+  await page.keyboard.press('Escape')
+  await page.reload()
+  await page.locator(`.date-rail__day button[data-day-key="${pastKey}"]`).click()
+  await expect(page.locator('[data-list-cell]').first()).toHaveValue(
+    'Temporary local journal data.',
+  )
+
+  await page.getByTestId('return-microscope').click()
+  await expect(page.getByTestId('voronoi-canvas')).toBeVisible()
+  await page.getByTestId('settings-toggle').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('start-anew').click()
+
+  await expect(page.getByTestId('list-view')).toBeVisible()
+  await expect(page.locator('[data-list-cell]').first()).not.toHaveValue(
+    'Temporary local journal data.',
+  )
+  const ownedKeys = await page.evaluate(() =>
+    Object.keys(localStorage).filter((key) => key.startsWith('mytosis.daily-journal')),
+  )
+  expect(ownedKeys.every((key) => !key.includes(pastKey))).toBe(true)
 })
 
 test('shares undo and redo with the bullet toolbar', async ({ page }) => {
@@ -137,6 +240,44 @@ test('preserves an active microscope edit during keyboard date switching', async
             ?.snapshot()
             .model.cells.find((cell) => cell.id === 'cell-4')?.text === expected,
         draft,
+      ),
+    )
+    .toBe(true)
+})
+
+test('opens an empty microscope day in inline typing mode without model drift', async ({
+  page,
+}) => {
+  await page.goto('/?view=microscope')
+  const todayKey = await selectedDayKey(page)
+  const past = await nearestPastDay(page, todayKey)
+  await past.click()
+
+  const editor = page.getByTestId('cell-editor')
+  await expect(editor).toBeVisible()
+  await expect(editor).toHaveAttribute('data-presentation', 'inline')
+  await expect(editor).toBeFocused()
+  const before = await page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot())
+  const cell = before.model.cells.find((candidate) => candidate.kind === 'journal')
+  if (!cell) throw new Error('Empty date cell is missing')
+  const draft = Array.from(
+    { length: 32 },
+    (_, index) => `growing thought ${index + 1}`,
+  ).join(' ')
+  await editor.fill(draft)
+  const during = await page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot())
+  expect(during.model.cells.find((candidate) => candidate.id === cell.id)?.site).toEqual(
+    cell.site,
+  )
+  await editor.press('Enter')
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        ({ cellId, text }) =>
+          window.__VORONOI_DEBUG__!
+            .snapshot()
+            .model.cells.find((candidate) => candidate.id === cellId)?.text === text,
+        { cellId: cell.id, text: draft },
       ),
     )
     .toBe(true)

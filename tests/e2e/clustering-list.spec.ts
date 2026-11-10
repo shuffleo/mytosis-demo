@@ -368,22 +368,29 @@ test('switches to the shared-model list editor and restores the microscope', asy
       (element) => getComputedStyle(element).animationName,
     ))
     .toBe('view-orbit-out')
-  await expect(page.getByTestId('list-view')).toHaveCount(0)
-  await expect(page.getByTestId('voronoi-canvas')).toBeVisible()
-  await expect(page.getByTestId('settings-toggle')).toBeVisible()
   await expect(page.locator('.app-shell')).toHaveClass(/view-transition-microscope-in/)
-  const incomingTrack = await page.getByTestId('microscope-view-track').evaluate((element) => ({
-    animationName: getComputedStyle(element).animationName,
-    runningAnimations: element.getAnimations().length,
-  }))
-  const incomingScene = await page.locator('.microscope-scene').evaluate((element) => ({
-    animationName: getComputedStyle(element).animationName,
-    runningAnimations: element.getAnimations().length,
-  }))
+  const { incomingTrack, incomingScene } = await page.locator('.app-shell').evaluate((shell) => {
+    const track = shell.querySelector<HTMLElement>('[data-testid="microscope-view-track"]')
+    const scene = shell.querySelector<HTMLElement>('.microscope-scene')
+    if (!track || !scene) throw new Error('Missing microscope transition layers')
+    return {
+      incomingTrack: {
+        animationName: getComputedStyle(track).animationName,
+        runningAnimations: track.getAnimations().length,
+      },
+      incomingScene: {
+        animationName: getComputedStyle(scene).animationName,
+        runningAnimations: scene.getAnimations().length,
+      },
+    }
+  })
   expect(incomingTrack.animationName).toBe('view-microscope-orbit-in')
   expect(incomingTrack.runningAnimations).toBeGreaterThan(0)
   expect(incomingScene.animationName).toBe('view-microscope-blur-in')
   expect(incomingScene.runningAnimations).toBeGreaterThan(0)
+  await expect(page.getByTestId('list-view')).toHaveCount(0)
+  await expect(page.getByTestId('voronoi-canvas')).toBeVisible()
+  await expect(page.getByTestId('settings-toggle')).toBeVisible()
   await expect
     .poll(async () => (await page.evaluate(() => window.__VORONOI_DEBUG__?.postProcess()))?.active)
     .toBe(true)
@@ -402,6 +409,9 @@ test('exposes an accessible list view and toolbar history controls', async ({ pa
   const state = await debugSnapshot(page)
   if (!state) throw new Error('Missing debug state')
   await page.mouse.click(state.field.center.x, state.field.center.y)
+  const inlineEditor = page.getByTestId('cell-editor')
+  await expect(inlineEditor).toHaveAttribute('data-presentation', 'inline')
+  await inlineEditor.press('Enter')
   await expect(page.getByTestId('history-undo')).toBeEnabled()
   await page.keyboard.press('ControlOrMeta+z')
   await expect(page.getByTestId('history-redo')).toBeEnabled()

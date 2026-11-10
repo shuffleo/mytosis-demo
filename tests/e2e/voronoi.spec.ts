@@ -373,7 +373,7 @@ test.beforeEach(async ({ page }) => {
 
 test('uses exact microscope defaults and composites Paper text below sharp UI', async ({ page }) => {
   const state = await snapshot(page)
-  expect(state.settings.schemaVersion).toBe(11)
+  expect(state.settings.schemaVersion).toBe(12)
   expect(state.settings.effects).toEqual({
     circle: {
       grain: 0.04,
@@ -612,9 +612,19 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
     }
   })
   await expect(page.locator('.voronoi-stage')).toHaveAttribute('data-focus-phase', 'entering')
+  const enteringEditorBounds = await editor.boundingBox()
   await expect
     .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
     .toBe('editing')
+  const focusedEditorBounds = await editor.boundingBox()
+  expect(enteringEditorBounds).not.toBeNull()
+  expect(focusedEditorBounds).not.toBeNull()
+  expect(
+    Math.hypot(
+      focusedEditorBounds!.x - enteringEditorBounds!.x,
+      focusedEditorBounds!.y - enteringEditorBounds!.y,
+    ),
+  ).toBeGreaterThan(8)
   await expect(page.locator('.voronoi-stage')).toHaveAttribute(
     'data-focused-cell',
     'cell-4',
@@ -626,12 +636,14 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
       height: Number.parseFloat(style.height),
       background: style.backgroundColor,
       border: style.borderWidth,
+      textFill: style.getPropertyValue('-webkit-text-fill-color'),
     }
   })
-  expect(editorStyle.width).toBeGreaterThanOrEqual(300)
-  expect(editorStyle.height).toBeGreaterThanOrEqual(170)
+  expect(editorStyle.width).toBeGreaterThan(20)
+  expect(editorStyle.height).toBeGreaterThan(20)
   expect(editorStyle.background).toBe('rgba(0, 0, 0, 0)')
   expect(editorStyle.border).toBe('0px')
+  expect(editorStyle.textFill).toBe('rgba(0, 0, 0, 0)')
   const focusedPostProcess = await postProcessSnapshot(page)
   const focusedCanvas = await snapshot(page)
   const focusedCellCenter = polygonCentroid(focusedCanvas.cells['cell-4'])
@@ -664,17 +676,34 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
       }
     }),
   ).toEqual(fixedOpticsBefore)
-  const initialEditorHeight = editorStyle.height
   await editor.fill(
     Array.from({ length: 18 }, (_, index) => `A responsive focused line ${index + 1}.`).join(
       '\n',
     ),
   )
-  const expandedHeight = await editor.evaluate((element) =>
-    Number.parseFloat(getComputedStyle(element).height),
+  await page.waitForTimeout(500)
+  const draftSnapshot = await snapshot(page)
+  const draftPostProcess = await postProcessSnapshot(page)
+  const draftEditorBounds = await editor.boundingBox()
+  const draftPolygon = draftSnapshot.cells['cell-4'].map((point) => ({
+    x: point.x * draftPostProcess.focusScene.scale +
+      draftPostProcess.focusScene.translate.x,
+    y: point.y * draftPostProcess.focusScene.scale +
+      draftPostProcess.focusScene.translate.y,
+  }))
+  expect(draftEditorBounds).not.toBeNull()
+  expect(draftEditorBounds!.x).toBeGreaterThanOrEqual(
+    Math.min(...draftPolygon.map((point) => point.x)) - 1,
   )
-  expect(expandedHeight).toBeGreaterThan(initialEditorHeight)
-  expect(expandedHeight).toBeLessThanOrEqual(620)
+  expect(draftEditorBounds!.y).toBeGreaterThanOrEqual(
+    Math.min(...draftPolygon.map((point) => point.y)) - 1,
+  )
+  expect(draftEditorBounds!.x + draftEditorBounds!.width).toBeLessThanOrEqual(
+    Math.max(...draftPolygon.map((point) => point.x)) + 1,
+  )
+  expect(draftEditorBounds!.y + draftEditorBounds!.height).toBeLessThanOrEqual(
+    Math.max(...draftPolygon.map((point) => point.y)) + 1,
+  )
   await expect(page.locator('.voronoi-stage')).toHaveCSS('--focus-blur', '22px')
   await expect(page.getByTestId('tool-add')).toHaveCount(0)
   await expect(page.getByTestId('tool-group')).toHaveCount(0)
@@ -801,6 +830,10 @@ test('stops texture uploads when static and falls back without WebGL', async ({ 
   await page.getByLabel('nutrients enabled').evaluate((element: HTMLInputElement) =>
     element.click(),
   )
+  await page.getByText('Ambient culture motion', { exact: true }).click()
+  await page.getByLabel('ambient motion').evaluate((element: HTMLInputElement) =>
+    element.click(),
+  )
   await page.getByTestId('settings-toggle').click()
   await expect
     .poll(async () => (await snapshot(page)).performance.dynamic, { timeout: 15_000 })
@@ -895,6 +928,27 @@ test('switches New Select tools, previews, and reuses the single empty cell at c
   expect(Math.min(createdWidth, createdHeight)).toBeGreaterThan(34)
   const firstSite = createdCell?.site
 
+  const inlineEditor = page.getByTestId('cell-editor')
+  await expect(inlineEditor).toBeVisible()
+  await expect(inlineEditor).toHaveAttribute('data-presentation', 'inline')
+  await expect(inlineEditor).toBeFocused()
+  expect(created.selectedId).toBe(createdCell?.id)
+  const createdArea = polygonArea(createdPolygon)
+  await inlineEditor.fill(
+    Array.from({ length: 24 }, (_, index) => `live draft ${index + 1}`).join(' '),
+  )
+  await expect
+    .poll(async () => {
+      const state = await snapshot(page)
+      return polygonArea(state.cells[createdCell!.id])
+    })
+    .toBeGreaterThan(createdArea * 1.08)
+  expect(
+    (await snapshot(page)).model.cells.find((cell) => cell.id === createdCell?.id)?.site,
+  ).toEqual(createdCell?.site)
+  await inlineEditor.press('Escape')
+
+  await toolbar.getByTestId('tool-add').click()
   await toolbar.getByTestId('tool-add').click()
   const recentered = await snapshot(page)
   expect(recentered.cellCount).toBe(created.cellCount)
@@ -905,6 +959,8 @@ test('switches New Select tools, previews, and reuses the single empty cell at c
   expect(Math.hypot(onlyEmptyCells[0].site.x, onlyEmptyCells[0].site.y)).toBeLessThan(0.09)
   expect(onlyEmptyCells[0].site).not.toEqual(firstSite)
 
+  await page.getByTestId('cell-editor').press('Escape')
+  await toolbar.getByTestId('tool-add').click()
   await page.getByTestId('sprout-toggle').click()
   await expect(page.getByTestId('sprout-toggle')).toHaveAttribute('aria-pressed', 'true')
   await page.getByTestId('tool-select').click()
@@ -926,9 +982,9 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
     textInset: 24,
     wallGrainEnabled: true,
     wallGrain: 0.65,
-    wallGrainFrequency: 0.1,
-    wallGrainOctaves: 2,
-    wallGrainOpacity: 0.74,
+    wallGrainFrequency: 2.4,
+    wallGrainOctaves: 1,
+    wallGrainOpacity: 0.64,
   })
   expect(fresh.settings.particles).toMatchObject({
     enabled: true,
@@ -942,6 +998,11 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
     hoverPeriodMs: 3360,
     hoverAttackMs: 300,
     morphResponse: 32,
+    ambientEnabled: true,
+    ambientAmplitudePx: 0.58,
+    ambientPeriodMs: 6200,
+    ambientPhaseSpread: 0.42,
+    ambientCoverage: 0.72,
   })
   expect(fresh.settings.seed).toMatchObject({
     delayMinMs: 4800,
@@ -1055,6 +1116,37 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
   await page.getByTestId('settings-toggle').click()
   await expect(page.getByTestId('settings-panel')).toBeHidden()
   await expect(page.getByTestId('settings-toggle')).toBeVisible()
+})
+
+test('switches microscope palette presets without recoloring the bullet editor', async ({
+  page,
+}) => {
+  await page.getByTestId('list-view-toggle').click()
+  await expect(page.getByTestId('list-view')).toBeVisible()
+  const listColorsBefore = await page.getByTestId('list-view').evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { color: style.color, background: style.backgroundImage }
+  })
+  await page.getByTestId('return-microscope').click()
+  await expect(page.getByTestId('voronoi-canvas')).toBeVisible()
+
+  await page.getByTestId('settings-toggle').click()
+  await page.getByText('Palette', { exact: true }).click()
+  const preset = page.getByLabel('preset')
+  await expect(preset).toHaveValue('Baseline · Graphite culture')
+  await preset.selectOption({ label: 'Organelle night · Violet / viridian' })
+  await expect
+    .poll(async () => (await snapshot(page)).settings.palette.exterior)
+    .toBe('#030607')
+
+  await page.getByTestId('settings-toggle').click()
+  await page.getByTestId('list-view-toggle').click()
+  await expect(page.getByTestId('list-view')).toBeVisible()
+  const listColorsAfter = await page.getByTestId('list-view').evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { color: style.color, background: style.backgroundImage }
+  })
+  expect(listColorsAfter).toEqual(listColorsBefore)
 })
 
 test('keeps text still while geometry breathes, then drags and power-resizes seams', async ({
@@ -1455,6 +1547,49 @@ test('keeps merge affordances static when reduced motion is preferred', async ({
   await page.mouse.up()
 })
 
+test('keeps ambient culture motion render-only and adjustable', async ({ page }) => {
+  await page.getByTestId('settings-toggle').click()
+  await page.getByText('Ambient culture motion', { exact: true }).click()
+  await expect(page.getByLabel('ambient motion')).toBeChecked()
+  await expect(page.getByLabel('idle amplitude px')).toHaveValue('0.58')
+  await expect(page.getByLabel('idle period ms')).toHaveValue('6200')
+  await expect(page.getByLabel('phase spread')).toHaveValue('0.42')
+  await expect(page.getByRole('textbox', { name: 'coverage', exact: true })).toHaveValue('0.72')
+  await setNumericBinding(page, 'idle amplitude px', 3)
+  await setNumericBinding(page, 'idle period ms', 1200)
+  await setNumericBinding(page, 'coverage', 1)
+  await page.getByTestId('settings-toggle').click()
+  await page.waitForTimeout(450)
+
+  const before = await snapshot(page)
+  expect(before.settings.motion).toMatchObject({
+    ambientEnabled: true,
+    ambientAmplitudePx: 3,
+    ambientPeriodMs: 1200,
+    ambientCoverage: 1,
+  })
+  expect(before.performance.dynamic).toBe(true)
+  await page.waitForTimeout(360)
+  const after = await snapshot(page)
+  expect(after.model.cells.map((cell) => ({ id: cell.id, site: cell.site }))).toEqual(
+    before.model.cells.map((cell) => ({ id: cell.id, site: cell.site })),
+  )
+  expect(
+    Math.max(
+      ...Object.keys(before.breathScales).map((id) =>
+        Math.abs(before.breathScales[id].cell - after.breathScales[id].cell),
+      ),
+    ),
+  ).toBeGreaterThan(0.001)
+  expect(
+    Math.max(
+      ...Object.keys(before.cells).map((id) =>
+        maximumDisplacement(before.cells[id], after.cells[id]),
+      ),
+    ),
+  ).toBeGreaterThan(0.03)
+})
+
 test('merges and splits members without escaping their hierarchical group', async ({ page }) => {
   await page.getByTestId('tool-group').click()
   let point = await sitePoint(page, 'cell-1')
@@ -1697,6 +1832,8 @@ test('incubates a resting empty cell with blurred synthesis and reveals it on se
   await expect.poll(async () => (await snapshot(page)).previewId).not.toBeNull()
   const previewId = (await snapshot(page)).previewId
   await page.mouse.click(addPoint.x, addPoint.y)
+  await page.getByTestId('cell-editor').press('Enter')
+  await page.getByTestId('tool-add').click()
   await page.getByTestId('sprout-toggle').click()
   await page.mouse.move(12, 12)
   await page.waitForTimeout(3200)

@@ -1,7 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { Pane } from 'tweakpane'
 import type { PostProcessStatus } from './microscope-postprocess'
-import { cloneSettings, type CanvasSettings } from './settings'
+import {
+  cloneSettings,
+  identifyPalettePreset,
+  palettePresetById,
+  PALETTE_PRESETS,
+  type CanvasSettings,
+  type PalettePresetId,
+} from './settings'
 
 const CONTROL_HINTS: Record<string, string> = {
   'Canvas configuration': 'Live controls for field geometry, motion, growth, groups, effects, and color.',
@@ -14,6 +21,7 @@ const CONTROL_HINTS: Record<string, string> = {
   Geometry: 'Cell-wall spacing, rounding, texture, and safe text inset.',
   'Seam nutrients': 'Slow Bakemono-inspired particles orbit just outside cell edges inside seams.',
   'Hover & morph': 'Timing and response of geometry-only breathing and path interpolation.',
+  'Ambient culture motion': 'Subtle render-only cell breathing that never changes saved geometry.',
   'Auto-growth seeds': 'Controls emergent seed creation, incubation, sticky blobs, and expiry.',
   Groups: 'Hierarchical group walls, tint, attraction, attach, detach, and settling.',
   Autogroup: 'Focused controls for deterministic local TF-IDF clustering.',
@@ -21,6 +29,7 @@ const CONTROL_HINTS: Record<string, string> = {
   'View transition': 'Controls the optical zoom-level transition between microscope and list views.',
   'Focused text editing': 'Controls the fixed-lens scene transition used for cell text editing.',
   Palette: 'Live colors for cells, walls, text, states, field, and exterior.',
+  preset: 'Applies an accessible microscope-inspired cell palette without changing list view colors.',
   renderer: 'Shows whether the GPU microscope renderer is active.',
   enabled: 'Turns this effect or experimental behavior on and off.',
   'whole-circle noise': 'Adds static film grain across the entire circular field.',
@@ -67,6 +76,11 @@ const CONTROL_HINTS: Record<string, string> = {
   'attack ms': 'Sets how quickly hover breathing reaches full strength.',
   response: 'Controls how quickly Paper.js paths follow new geometry.',
   easing: 'Chooses the interpolation curve used by motion.',
+  'ambient motion': 'Lets a restrained subset of cells breathe while the canvas is idle.',
+  'idle amplitude px': 'Maximum render-only edge movement for idle cell breathing.',
+  'idle period ms': 'Duration of one ambient breathing cycle.',
+  'phase spread': 'Offsets breathing phases across cells; zero moves them together.',
+  coverage: 'Sets the deterministic share of cells participating in ambient motion.',
   'delay min': 'Minimum randomized wait before automatic seed spawning.',
   'delay max': 'Maximum randomized wait before automatic seed spawning.',
   'spawn rate': 'Scales how frequently valid Delaunay gaps produce seeds.',
@@ -145,6 +159,7 @@ interface ControlPanelProps {
   onChange: (settings: CanvasSettings) => void
   onAddSeed: () => void
   onDieSeed: () => void
+  onStartAnew: () => void
 }
 
 export function ControlPanel({
@@ -153,18 +168,21 @@ export function ControlPanel({
   onChange,
   onAddSeed,
   onDieSeed,
+  onStartAnew,
 }: ControlPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onChangeRef = useRef(onChange)
   const onAddSeedRef = useRef(onAddSeed)
   const onDieSeedRef = useRef(onDieSeed)
+  const onStartAnewRef = useRef(onStartAnew)
   const initialSettingsRef = useRef(settings)
 
   useEffect(() => {
     onChangeRef.current = onChange
     onAddSeedRef.current = onAddSeed
     onDieSeedRef.current = onDieSeed
-  }, [onAddSeed, onChange, onDieSeed])
+    onStartAnewRef.current = onStartAnew
+  }, [onAddSeed, onChange, onDieSeed, onStartAnew])
 
   useEffect(() => {
     const container = containerRef.current
@@ -432,6 +450,33 @@ export function ControlPanel({
     motion.addBinding(params.motion, 'easing', {
       label: 'easing',
       options: { Smooth: 'smooth', Spring: 'spring', Direct: 'direct' },
+    })
+
+    const ambient = pane.addFolder({ title: 'Ambient culture motion', expanded: false })
+    ambient.addBinding(params.motion, 'ambientEnabled', { label: 'ambient motion' })
+    ambient.addBinding(params.motion, 'ambientAmplitudePx', {
+      label: 'idle amplitude px',
+      min: 0,
+      max: 3,
+      step: 0.02,
+    })
+    ambient.addBinding(params.motion, 'ambientPeriodMs', {
+      label: 'idle period ms',
+      min: 1200,
+      max: 16000,
+      step: 100,
+    })
+    ambient.addBinding(params.motion, 'ambientPhaseSpread', {
+      label: 'phase spread',
+      min: 0,
+      max: 1,
+      step: 0.01,
+    })
+    ambient.addBinding(params.motion, 'ambientCoverage', {
+      label: 'coverage',
+      min: 0,
+      max: 1,
+      step: 0.01,
     })
 
     const seed = pane.addFolder({ title: 'Auto-growth seeds', expanded: false })
@@ -836,6 +881,22 @@ export function ControlPanel({
     })
 
     const palette = pane.addFolder({ title: 'Palette', expanded: false })
+    const paletteChoice: { preset: PalettePresetId | 'custom' } = {
+      preset: identifyPalettePreset(params.palette),
+    }
+    const presetBinding = palette.addBinding(paletteChoice, 'preset', {
+      label: 'preset',
+      options: Object.fromEntries([
+        ...PALETTE_PRESETS.map((preset) => [preset.label, preset.id]),
+        ['Custom', 'custom'],
+      ]),
+    })
+    presetBinding.on('change', ({ value }) => {
+      if (value === 'custom') return
+      Object.assign(params.palette, structuredClone(palettePresetById(value).palette))
+      pane.refresh()
+      emitSettings()
+    })
     const colorBindings: Array<[keyof CanvasSettings['palette'], string]> = [
       ['cellLight', 'cell light'],
       ['cellMid', 'cell mid'],
@@ -860,7 +921,10 @@ export function ControlPanel({
       ['exterior', 'exterior'],
     ]
     for (const [key, label] of colorBindings) {
-      palette.addBinding(params.palette, key, { label })
+      palette.addBinding(params.palette, key, { label }).on('change', () => {
+        paletteChoice.preset = identifyPalettePreset(params.palette)
+        presetBinding.refresh()
+      })
     }
 
     pane.addButton({ title: 'Reset defaults' }).on('click', () => {
@@ -879,6 +943,7 @@ export function ControlPanel({
       Object.assign(params.editFocus, defaults.editFocus)
       Object.assign(params.clustering, defaults.clustering)
       Object.assign(params.palette, defaults.palette)
+      paletteChoice.preset = 'baseline'
       params.schemaVersion = defaults.schemaVersion
       pane.refresh()
       emitSettings()
@@ -907,6 +972,15 @@ export function ControlPanel({
   return (
     <div className="control-panel-stack" data-testid="settings-panel">
       <div ref={containerRef} className="tweakpane-host" />
+      <button
+        className="start-anew-button"
+        data-testid="start-anew"
+        type="button"
+        onClick={() => onStartAnewRef.current()}
+      >
+        Start anew
+        <span>Erase all saved journal pages</span>
+      </button>
     </div>
   )
 }
