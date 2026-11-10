@@ -105,7 +105,8 @@ jobs:
             --message "PR #${{ github.event.pull_request.number }}" \
             --json)"
           printf '%s\n' "$output"
-          preview_url="$(printf '%s' "$output" | jq -er '.preview.urls[0]')"
+          json="$(printf '%s\n' "$output" | sed -n '/^{/,$p')"
+          preview_url="$(printf '%s' "$json" | jq -er '.preview.urls[0]')"
           echo "preview_url=$preview_url" >> "$GITHUB_OUTPUT"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
