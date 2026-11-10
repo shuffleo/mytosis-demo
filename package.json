@@ -11,6 +11,7 @@
     "test": "vitest run src",
     "test:e2e": "playwright test",
     "capture": "node tests/capture-clustering.mjs",
+    "capture:toolbar": "node tests/capture-toolbar-preview.mjs",
     "preview": "vite preview",
     "deploy:dry-run": "wrangler deploy --dry-run",
     "deploy:cloudflare": "npm run build && wrangler deploy --strict"
