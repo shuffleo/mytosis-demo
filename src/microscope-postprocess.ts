@@ -17,6 +17,7 @@ export interface PostProcessDebugSnapshot {
   pointerEvents: string
   field: PostProcessField
   focusScene: FocusSceneState
+  edgeFeatherPx: number
 }
 
 export interface FocusSceneState {
@@ -47,6 +48,7 @@ uniform vec2 uResolution;
 uniform vec2 uFieldCenter;
 uniform float uFieldRadius;
 uniform float uCircleGrain;
+uniform float uEdgeFeather;
 uniform float uWallGrainEnabled;
 uniform float uWallDisplacement;
 uniform float uWallFrequency;
@@ -138,6 +140,14 @@ vec2 inverseSceneTransform(vec2 displayPx) {
   return (unrotated - uContentTranslate) / max(0.001, uContentScale);
 }
 
+float circleEdgeAlpha(vec2 uv) {
+  vec2 samplePx = uv * uResolution;
+  float radius = distance(samplePx, uFieldCenter) / max(1.0, uFieldRadius);
+  if (uEdgeFeather <= 0.0) return 1.0 - step(1.0, radius);
+  float feather = min(1.0, uEdgeFeather / max(1.0, uFieldRadius));
+  return 1.0 - smoothstep(max(0.0, 1.0 - feather), 1.0, radius);
+}
+
 vec4 compositeScene(vec2 uv, vec2 displacement) {
   float sceneInBounds =
     step(0.0, uv.x) * step(uv.x, 1.0) *
@@ -148,6 +158,8 @@ vec4 compositeScene(vec2 uv, vec2 displacement) {
     step(0.0, wallUv.y) * step(wallUv.y, 1.0);
   vec4 scene = texture(uScene, clamp(uv, 0.0, 1.0)) * sceneInBounds;
   vec4 walls = texture(uWalls, clamp(wallUv, 0.0, 1.0)) * wallsInBounds;
+  scene *= circleEdgeAlpha(uv);
+  walls *= circleEdgeAlpha(wallUv);
   vec4 composited = mix(scene, walls, walls.a);
   composited.rgb *= uSceneOpacity;
   return composited;
@@ -250,7 +262,8 @@ void main() {
     color *= 1.0 - uScanlines * 0.12 * scan;
   }
 
-  outputColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+  float outputAlpha = circleEdgeAlpha(vUv);
+  outputColor = vec4(clamp(color, 0.0, 1.0), outputAlpha);
 }`
 
 function compileShader(
@@ -438,6 +451,7 @@ export class MicroscopePostProcessor {
       pointerEvents: getComputedStyle(this.output).pointerEvents,
       field: structuredClone(this.field),
       focusScene: structuredClone(this.focusScene),
+      edgeFeatherPx: this.effectiveEdgeFeatherPx(),
     }
   }
 
@@ -474,6 +488,8 @@ export class MicroscopePostProcessor {
     const { effects, geometry, particles } = this.settings
     return (
       effects.circle.grain > 0 ||
+      effects.circle.edgeFeatherPx > 0 ||
+      effects.circle.focusEdgeFeatherPx > 0 ||
       effects.vignette.enabled ||
       effects.focusVignette.enabled ||
       effects.lens.enabled ||
@@ -499,6 +515,15 @@ export class MicroscopePostProcessor {
       distortion: mix(regular.distortion, focused.distortion),
       grain: mix(regular.grain, focused.grain),
     }
+  }
+
+  private effectiveEdgeFeatherPx() {
+    const { circle } = this.settings.effects
+    const ratio = Math.max(0, Math.min(1, this.focusScene.vignetteMix))
+    return (
+      circle.edgeFeatherPx +
+      (circle.focusEdgeFeatherPx - circle.edgeFeatherPx) * ratio
+    )
   }
 
   private initialize(gl: WebGL2RenderingContext) {
@@ -644,6 +669,7 @@ export class MicroscopePostProcessor {
     const vignette = this.effectiveVignette()
     const { geometry } = this.settings
     uniform1f('uCircleGrain', circle.grain)
+    uniform1f('uEdgeFeather', this.effectiveEdgeFeatherPx() * pixelRatio)
     uniform1f('uWallGrainEnabled', geometry.wallGrainEnabled ? 1 : 0)
     uniform1f('uWallDisplacement', geometry.wallGrain)
     uniform1f('uWallFrequency', geometry.wallGrainFrequency)

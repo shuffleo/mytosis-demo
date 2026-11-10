@@ -15,6 +15,9 @@ const CONTROL_HINTS: Record<string, string> = {
   'Microscope effects': 'GPU post-processing applied only to the circular Paper.js field.',
   'Microscope effects — unavailable': 'WebGL2 is unavailable, so the Paper.js fallback stays active.',
   'Whole circle texture': 'Static texture applied uniformly across the circular field.',
+  'Circle edge': 'Feathers the microscope boundary before and after GPU processing without softening the scene.',
+  'edge profile': 'Chooses the regular-view or focused-editing circle edge.',
+  'edge feather px': 'Sets the useful inward fade at the circle edge in CSS pixels.',
   'Microscope vignette': 'Optical blur, dimming, distortion, and grain concentrated at the rim.',
   profile: 'Chooses independent regular-view or focused-editing vignette settings.',
   'Lens shader': 'Centered spherical refraction locked to the field radius.',
@@ -225,6 +228,42 @@ export function ControlPanel({
       max: 0.08,
       step: 0.001,
     })
+
+    const circleEdge = microscope.addFolder({ title: 'Circle edge', expanded: true })
+    const circleEdgeChoice: { profile: 'regular' | 'focused' } = {
+      profile: 'regular',
+    }
+    const circleEdgeParams = {
+      featherPx: params.effects.circle.edgeFeatherPx,
+    }
+    const syncCircleEdgeProfile = () => {
+      if (circleEdgeChoice.profile === 'focused') {
+        params.effects.circle.focusEdgeFeatherPx = circleEdgeParams.featherPx
+      } else {
+        params.effects.circle.edgeFeatherPx = circleEdgeParams.featherPx
+      }
+      emitSettings()
+    }
+    circleEdge
+      .addBinding(circleEdgeChoice, 'profile', {
+        label: 'edge profile',
+        options: { 'Regular view': 'regular', 'Focused edit': 'focused' },
+      })
+      .on('change', ({ value }) => {
+        circleEdgeParams.featherPx =
+          value === 'focused'
+            ? params.effects.circle.focusEdgeFeatherPx
+            : params.effects.circle.edgeFeatherPx
+        pane.refresh()
+      })
+    circleEdge
+      .addBinding(circleEdgeParams, 'featherPx', {
+        label: 'edge feather px',
+        min: 0,
+        max: 48,
+        step: 1,
+      })
+      .on('change', syncCircleEdgeProfile)
 
     const vignette = microscope.addFolder({ title: 'Microscope vignette', expanded: true })
     const vignetteChoice: { profile: 'regular' | 'focused' } = { profile: 'regular' }

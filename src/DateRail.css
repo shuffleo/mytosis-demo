@@ -7,26 +7,34 @@
   --date-rail-selected: #d8e1dc;
   --date-rail-selected-fg: #151916;
   --date-rail-selected-hover: #cbd7d0;
+  --date-rail-background: #151916;
   position: relative;
   display: flex;
   gap: 10px;
+  align-items: center;
   justify-content: center;
   width: 100%;
   min-width: 0;
+  padding: 6px;
   color: var(--date-rail-fg);
+  border: 1px solid var(--date-rail-border);
+  border-radius: 14px;
+  background: var(--date-rail-background);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
   font: inherit;
 }
 
 .date-rail--list,
 .date-rail[data-theme='list'] {
   --date-rail-fg: #282d2a;
-  --date-rail-muted: #69716c;
+  --date-rail-muted: #59615c;
   --date-rail-surface: rgba(248, 249, 246, 0.98);
   --date-rail-border: rgba(40, 45, 42, 0.18);
   --date-rail-hover: rgba(40, 45, 42, 0.08);
   --date-rail-selected: #303631;
   --date-rail-selected-fg: #f6f8f5;
   --date-rail-selected-hover: #3b433e;
+  --date-rail-background: #f3f5f1;
 }
 
 .date-rail button {
@@ -101,10 +109,16 @@
   flex: 1 0 43px;
   min-width: 43px;
   max-width: 60px;
-  opacity: 0.6;
+  color: var(--date-rail-muted);
+  opacity: 1;
 }
 
 .date-rail__day.is-content {
+  color: var(--date-rail-fg);
+  opacity: 1;
+}
+
+.date-rail__day:has(button[aria-pressed='true']) {
   opacity: 1;
 }
 
@@ -159,6 +173,21 @@
   border-radius: 2px;
   background: currentColor;
   opacity: 0;
+}
+
+.date-rail__today-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.date-rail__day .date-rail__today-dot {
+  position: absolute;
+  right: 50%;
+  bottom: 4px;
+  transform: translateX(50%);
 }
 
 .date-rail__day button[aria-pressed='true'] {
@@ -314,17 +343,22 @@
 
 .date-rail__today {
   position: absolute;
-  top: 10px;
-  right: 0;
+  top: 50%;
+  right: 6px;
   z-index: 1;
-  min-width: 58px;
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  min-width: 62px;
   height: 34px;
-  padding: 0 10px;
+  padding: 0 9px;
+  overflow: hidden;
   border: 1px solid var(--date-rail-border) !important;
   border-radius: 8px;
   opacity: 0;
   pointer-events: none;
-  transform: translateX(8px) scale(0.96);
+  transform: translate(4px, -50%) scale(0.96);
   transition:
     opacity 220ms ease-in-out,
     transform 360ms cubic-bezier(.2,.9,.25,1.08),
@@ -335,7 +369,7 @@
   opacity: 1;
   pointer-events: auto;
   cursor: pointer;
-  transform: translateX(0) scale(1);
+  transform: translate(0, -50%) scale(1);
 }
 
 .date-rail__today.is-visible:hover {

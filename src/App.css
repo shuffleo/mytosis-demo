@@ -15,13 +15,13 @@
 }
 
 .journal-date-rail {
-  position: fixed;
+  position: sticky;
   z-index: 54;
-  top: max(10px, env(safe-area-inset-top));
-  right: 16px;
-  left: 16px;
+  top: 0;
   display: flex;
-  width: calc(100% - 32px);
+  box-sizing: border-box;
+  width: 100%;
+  padding: max(10px, env(safe-area-inset-top)) 16px 0;
   pointer-events: none;
 }
 
@@ -234,6 +234,20 @@
 
 .microscope-viewport-mask {
   overflow: hidden;
+  -webkit-mask-image: radial-gradient(
+    circle var(--field-radius) at var(--field-center-x) var(--field-center-y),
+    #000 0,
+    #000 calc(var(--field-radius) - var(--circle-edge-feather)),
+    transparent var(--field-radius)
+  );
+  mask-image: radial-gradient(
+    circle var(--field-radius) at var(--field-center-x) var(--field-center-y),
+    #000 0,
+    #000 calc(var(--field-radius) - var(--circle-edge-feather)),
+    transparent var(--field-radius)
+  );
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
 }
 
 .microscope-scene {
@@ -303,10 +317,11 @@
 .cell-editor {
   position: absolute;
   z-index: 44;
+  box-sizing: border-box;
   margin: 0;
   padding: 0;
   overflow: hidden;
-  color: transparent;
+  color: var(--editor-text);
   border: 0;
   outline: none;
   background: transparent;
@@ -315,11 +330,11 @@
   font-weight: 500;
   text-align: center;
   text-align-last: center;
-  pointer-events: none;
+  pointer-events: auto;
   resize: none;
   transform: translate(-50%, -50%);
-  caret-color: transparent;
-  -webkit-text-fill-color: transparent;
+  caret-color: var(--editor-caret);
+  -webkit-text-fill-color: currentColor;
   contain: paint;
 }
 
@@ -346,12 +361,6 @@
   z-index: 43;
   inset: 0;
   cursor: text;
-}
-
-.cell-editor::selection {
-  color: transparent;
-  background: transparent;
-  -webkit-text-fill-color: transparent;
 }
 
 .tool-dock {
@@ -471,6 +480,7 @@
 
 .tool-button:focus-visible,
 .sprout-toggle:focus-visible,
+.icon-tool-button:focus-visible,
 .settings-toggle:focus-visible {
   outline: 2px solid #9eb9ac;
   outline-offset: 3px;
@@ -602,9 +612,9 @@
 }
 
 .cell-editor::placeholder {
-  color: transparent;
-  opacity: 0;
-  -webkit-text-fill-color: transparent;
+  color: #8b938f;
+  opacity: 0.72;
+  -webkit-text-fill-color: currentColor;
 }
 
 [data-tooltip]::after {
@@ -778,9 +788,7 @@
 
 @media (max-width: 700px) {
   .journal-date-rail {
-    right: 8px;
-    left: 8px;
-    width: calc(100% - 16px);
+    padding-inline: 8px;
   }
 
   .tool-dock {

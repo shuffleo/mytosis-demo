@@ -78,6 +78,12 @@ test.beforeEach(async ({ page }) => {
 
 test('starts in list view and presents local-day date states', async ({ page }) => {
   await expect(page.getByTestId('date-rail')).toHaveAttribute('data-theme', 'list')
+  const listRailSurface = await page.getByTestId('date-rail').evaluate((rail) => ({
+    background: getComputedStyle(rail).backgroundColor,
+    position: getComputedStyle(rail.parentElement!).position,
+  }))
+  expect(listRailSurface.background).toBe('rgb(243, 245, 241)')
+  expect(listRailSurface.position).toBe('sticky')
   const todayKey = await selectedDayKey(page)
   await expect(
     page.locator(`.date-rail__day button[data-day-key="${todayKey}"]`),
@@ -88,7 +94,7 @@ test('starts in list view and presents local-day date states', async ({ page }) 
   await expect(future).toHaveCSS('opacity', '0.4')
 
   const emptyPast = await nearestPastDay(page, todayKey)
-  await expect(emptyPast.locator('..')).toHaveCSS('opacity', '0.6')
+  await expect(emptyPast.locator('..')).toHaveCSS('opacity', '1')
 
   const railGeometry = await page.getByTestId('date-rail').evaluate((rail) => {
     const month = rail.querySelector('.date-rail__month')!.getBoundingClientRect()
@@ -115,6 +121,10 @@ test('starts in list view and presents local-day date states', async ({ page }) 
   await expect(page.getByTestId('date-rail')).toHaveAttribute(
     'data-theme',
     'microscope',
+  )
+  await expect(page.getByTestId('date-rail')).toHaveCSS(
+    'background-color',
+    'rgb(21, 25, 22)',
   )
   const microscopeGeometry = await page.getByTestId('date-rail').evaluate((rail) => {
     const month = rail.querySelector('.date-rail__month')!.getBoundingClientRect()
@@ -179,6 +189,18 @@ test('travels through days directionally and supports wheel plus Today recovery'
   await expect(page.locator('.app-shell')).toHaveClass(/date-transition-backward-/)
   await expect.poll(() => selectedDayKey(page)).toBe(pastKey)
   await expect(page.locator('.app-shell')).not.toHaveClass(/date-transition-/)
+  const todayButton = page.getByTestId('date-rail-today')
+  await expect(todayButton).toBeVisible()
+  await expect(todayButton).toBeEnabled()
+  await expect(
+    page.locator(`.date-rail__day button[data-day-key="${todayKey}"] .date-rail__today-dot`),
+  ).toBeVisible()
+  const attachedGeometry = await page.getByTestId('date-rail').evaluate((rail) => {
+    const railBox = rail.getBoundingClientRect()
+    const todayBox = rail.querySelector('.date-rail__today')!.getBoundingClientRect()
+    return railBox.right - todayBox.right
+  })
+  expect(attachedGeometry).toBeLessThanOrEqual(7)
 
   await page.getByTestId('date-rail').dispatchEvent('wheel', { deltaY: 80 })
   await expect(page.locator('.app-shell')).toHaveClass(/date-transition-forward-/)
@@ -196,7 +218,6 @@ test('travels through days directionally and supports wheel plus Today recovery'
   if (!nextEarliestKey) throw new Error('Next earliest visible day is missing')
   await nextEarliestVisible.click()
   await expect.poll(() => selectedDayKey(page)).toBe(nextEarliestKey)
-  const todayButton = page.getByTestId('date-rail-today')
   await expect(todayButton).toBeVisible()
   await expect(todayButton).toBeEnabled()
   await todayButton.click()
@@ -409,6 +430,74 @@ test('maps focused clicks to the rendered caret and keeps inline outside clicks 
   expect(
     await page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot().selectedId),
   ).not.toBeNull()
+})
+
+test('uses native caret geometry across focused zoom, DPR, and font sizes', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 1180, height: 820 },
+    deviceScaleFactor: 2,
+  })
+  const page = await context.newPage()
+  try {
+    await page.goto('/?view=microscope')
+    await page.getByTestId('tool-select').click()
+    const point = await visibleCellPoint(page, 'cell-4')
+    await page.mouse.dblclick(point.x, point.y, { delay: 70 })
+    const editor = page.getByTestId('cell-editor')
+    await expect(editor).toBeFocused()
+    await expect
+      .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
+      .toBe('editing')
+    await editor.fill('alpha beta gamma delta epsilon zeta eta theta')
+
+    expect(await page.evaluate(() => window.devicePixelRatio)).toBe(2)
+    expect(
+      await page.evaluate(
+        () => window.__VORONOI_DEBUG__?.postProcess()?.focusScene.scale ?? 1,
+      ),
+    ).toBeGreaterThan(1)
+
+    for (const fontSize of [9, 13, 17]) {
+      await editor.evaluate((element, size) => {
+        element.style.fontSize = `${size}px`
+        element.style.lineHeight = `${size * 1.22}px`
+      }, fontSize)
+      const box = await editor.boundingBox()
+      if (!box) throw new Error('Native editor bounds are missing')
+      await page.mouse.click(box.x + box.width * 0.22, box.y + box.height * 0.5)
+      const left = await editor.evaluate((element) => element.selectionStart)
+      await page.mouse.click(box.x + box.width * 0.78, box.y + box.height * 0.5)
+      const right = await editor.evaluate((element) => element.selectionStart)
+      expect(right, `font size ${fontSize}px`).toBeGreaterThan(left)
+    }
+
+    const selectionBox = await editor.boundingBox()
+    if (!selectionBox) throw new Error('Native editor selection bounds are missing')
+    await page.mouse.move(
+      selectionBox.x + selectionBox.width * 0.2,
+      selectionBox.y + selectionBox.height * 0.5,
+    )
+    await page.mouse.down()
+    await page.mouse.move(
+      selectionBox.x + selectionBox.width * 0.8,
+      selectionBox.y + selectionBox.height * 0.5,
+      { steps: 8 },
+    )
+    await page.mouse.up()
+    const selection = await editor.evaluate((element) => ({
+      start: element.selectionStart,
+      end: element.selectionEnd,
+      spellcheck: element.spellcheck,
+      pointerEvents: getComputedStyle(element).pointerEvents,
+    }))
+    expect(selection.end).toBeGreaterThan(selection.start)
+    expect(selection.spellcheck).toBe(true)
+    expect(selection.pointerEvents).toBe('auto')
+  } finally {
+    await context.close()
+  }
 })
 
 test('popup calendar supports keyboard navigation and passes accessibility checks', async ({

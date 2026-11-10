@@ -567,7 +567,7 @@ function App() {
           onCommit={commitListDocument}
         />
       )}
-      <div className="journal-date-rail">
+      <div className={`journal-date-rail journal-date-rail--${view}`}>
         <DateRail
           selectedDayKey={selectedDayKey}
           onSelectDay={selectDay}

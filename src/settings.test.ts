@@ -144,6 +144,8 @@ describe('refined control defaults', () => {
     expect(defaultSettings.effects).toEqual({
       circle: {
         grain: 0.04,
+        edgeFeatherPx: 20,
+        focusEdgeFeatherPx: 20,
       },
       vignette: {
         enabled: true,
@@ -157,13 +159,13 @@ describe('refined control defaults', () => {
       },
       focusVignette: {
         enabled: true,
-        intensity: 0.78,
-        dim: 0.56,
-        blurRadius: 0.25,
-        rimWidth: 0.24,
-        softness: 0.08,
+        intensity: 1,
+        dim: 0.8,
+        blurRadius: 1,
+        rimWidth: 0.16,
+        softness: 0.02,
         distortion: 0.001,
-        grain: 0.018,
+        grain: 0.024,
       },
       lens: {
         enabled: true,
@@ -332,6 +334,42 @@ describe('refined control defaults', () => {
     expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.effects.vignette.dim).toBe(0.37)
     expect(migrated.effects.focusVignette.dim).toBe(0.37)
+  })
+
+  it('moves untouched version-thirteen focus optics to the new defaults', () => {
+    const legacy = structuredClone(defaultSettings)
+    legacy.schemaVersion = 13
+    legacy.effects.focusVignette = {
+      enabled: true,
+      intensity: 0.78,
+      dim: 0.56,
+      blurRadius: 0.25,
+      rimWidth: 0.24,
+      softness: 0.08,
+      distortion: 0.001,
+      grain: 0.018,
+    }
+    delete (
+      legacy.effects.circle as Partial<typeof legacy.effects.circle>
+    ).edgeFeatherPx
+    delete (
+      legacy.effects.circle as Partial<typeof legacy.effects.circle>
+    ).focusEdgeFeatherPx
+
+    const migrated = migrateSettings(legacy)
+    expect(migrated.effects.focusVignette).toEqual(
+      defaultSettings.effects.focusVignette,
+    )
+    expect(migrated.effects.circle.edgeFeatherPx).toBe(20)
+    expect(migrated.effects.circle.focusEdgeFeatherPx).toBe(20)
+  })
+
+  it('preserves customized version-thirteen focus optics during migration', () => {
+    const legacy = structuredClone(defaultSettings)
+    legacy.schemaVersion = 13
+    legacy.effects.focusVignette.dim = 0.41
+
+    expect(migrateSettings(legacy).effects.focusVignette.dim).toBe(0.41)
   })
 
   it('keeps cell text WCAG AA readable in every microscope palette', () => {

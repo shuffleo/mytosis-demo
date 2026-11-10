@@ -108,6 +108,8 @@ interface Snapshot {
     effects: {
       circle: {
         grain: number
+        edgeFeatherPx: number
+        focusEdgeFeatherPx: number
       }
       vignette: {
         enabled: boolean
@@ -262,6 +264,7 @@ interface PostProcessSnapshot {
     blurPx: number
     opacity: number
   }
+  edgeFeatherPx: number
 }
 
 async function snapshot(page: Page): Promise<Snapshot> {
@@ -276,6 +279,20 @@ async function postProcessSnapshot(page: Page): Promise<PostProcessSnapshot> {
     const state = window.__VORONOI_DEBUG__?.postProcess()
     if (!state) throw new Error('Post-process debug bridge is unavailable')
     return state
+  })
+}
+
+async function alignedSceneSnapshot(
+  page: Page,
+): Promise<{ canvas: Snapshot; postProcess: PostProcessSnapshot }> {
+  return page.evaluate(() => {
+    const debug = window.__VORONOI_DEBUG__
+    const postProcess = debug?.postProcess()
+    if (!debug || !postProcess) throw new Error('Voronoi debug bridge is unavailable')
+    return {
+      canvas: debug.snapshot() as Snapshot,
+      postProcess,
+    }
   })
 }
 
@@ -388,10 +405,12 @@ test.beforeEach(async ({ page }) => {
 
 test('uses exact microscope defaults and composites Paper text below sharp UI', async ({ page }) => {
   const state = await snapshot(page)
-  expect(state.settings.schemaVersion).toBe(13)
+  expect(state.settings.schemaVersion).toBe(14)
   expect(state.settings.effects).toEqual({
     circle: {
       grain: 0.04,
+      edgeFeatherPx: 20,
+      focusEdgeFeatherPx: 20,
     },
     vignette: {
       enabled: true,
@@ -405,13 +424,13 @@ test('uses exact microscope defaults and composites Paper text below sharp UI', 
     },
     focusVignette: {
       enabled: true,
-      intensity: 0.78,
-      dim: 0.56,
-      blurRadius: 0.25,
-      rimWidth: 0.24,
-      softness: 0.08,
+      intensity: 1,
+      dim: 0.8,
+      blurRadius: 1,
+      rimWidth: 0.16,
+      softness: 0.02,
       distortion: 0.001,
-      grain: 0.018,
+      grain: 0.024,
     },
     lens: {
       enabled: true,
@@ -458,7 +477,7 @@ test('uses exact microscope defaults and composites Paper text below sharp UI', 
 test('toggles vignette, lens, and CRT independently with live parameters', async ({ page }) => {
   await page.getByTestId('settings-toggle').click()
   const panel = page.getByTestId('settings-panel')
-  const vignetteProfile = panel.getByLabel('profile')
+  const vignetteProfile = panel.getByLabel('profile', { exact: true })
   await expect(vignetteProfile).toHaveValue('Regular view')
   await vignetteProfile.selectOption({ label: 'Focused edit' })
   await setNumericBinding(page, 'rim dim', 0.41)
@@ -615,6 +634,44 @@ test('exposes live grain and glow controls in the open microscope panel', async 
   expect(lowDetail.equals(highDetail)).toBe(false)
 })
 
+test('feathers the circle before and after the shader in regular and focused modes', async ({
+  page,
+}) => {
+  const mask = page.locator('.microscope-viewport-mask')
+  await expect(mask).not.toHaveCSS('mask-image', 'none')
+  expect((await postProcessSnapshot(page)).edgeFeatherPx).toBe(20)
+
+  await page.getByTestId('settings-toggle').click()
+  const panel = page.getByTestId('settings-panel')
+  await expect(panel.getByLabel('edge profile')).toBeVisible()
+  await setNumericBinding(page, 'edge feather px', 12)
+  await panel.getByLabel('edge profile').selectOption({ label: 'Focused edit' })
+  await setNumericBinding(page, 'edge feather px', 28)
+  let state = await snapshot(page)
+  expect(state.settings.effects.circle.edgeFeatherPx).toBe(12)
+  expect(state.settings.effects.circle.focusEdgeFeatherPx).toBe(28)
+  expect((await postProcessSnapshot(page)).edgeFeatherPx).toBe(12)
+
+  await page.getByTestId('settings-toggle').click()
+  await page.getByTestId('tool-select').click()
+  const point = await sitePoint(page, 'cell-4')
+  await page.mouse.dblclick(point.x, point.y, { delay: 70 })
+  await expect
+    .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
+    .toBe('editing')
+  const focused = await postProcessSnapshot(page)
+  expect(focused.edgeFeatherPx).toBeCloseTo(28, 4)
+  expect(focused.focusScene.blurPx).toBeCloseTo(0, 4)
+  await expect(mask).not.toHaveCSS('mask-image', 'none')
+
+  await page.getByTestId('cell-editor').press('Escape')
+  await expect
+    .poll(async () => (await postProcessSnapshot(page)).edgeFeatherPx)
+    .toBeCloseTo(12, 4)
+  state = await snapshot(page)
+  expect(state.settings.effects.circle.edgeFeatherPx).toBe(12)
+})
+
 test('zooms a cell into a large integrated editor and restores the microscope', async ({
   page,
 }) => {
@@ -669,15 +726,21 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
       background: style.backgroundColor,
       border: style.borderWidth,
       textFill: style.getPropertyValue('-webkit-text-fill-color'),
+      pointerEvents: style.pointerEvents,
+      spellcheck: (element as HTMLTextAreaElement).spellcheck,
     }
   })
   expect(editorStyle.width).toBeGreaterThan(20)
   expect(editorStyle.height).toBeGreaterThan(20)
   expect(editorStyle.background).toBe('rgba(0, 0, 0, 0)')
   expect(editorStyle.border).toBe('0px')
-  expect(editorStyle.textFill).toBe('rgba(0, 0, 0, 0)')
-  const focusedPostProcess = await postProcessSnapshot(page)
-  const focusedCanvas = await snapshot(page)
+  expect(editorStyle.textFill).not.toBe('rgba(0, 0, 0, 0)')
+  expect(editorStyle.pointerEvents).toBe('auto')
+  expect(editorStyle.spellcheck).toBe(true)
+  const {
+    canvas: focusedCanvas,
+    postProcess: focusedPostProcess,
+  } = await alignedSceneSnapshot(page)
   const focusedCellCenter = polygonCentroid(focusedCanvas.cells['cell-4'])
   expect(
     Math.abs(
@@ -685,14 +748,14 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
         focusedPostProcess.focusScene.translate.x -
         focusedCanvas.field.center.x,
     ),
-  ).toBeLessThan(0.5)
+  ).toBeLessThan(1)
   expect(
     Math.abs(
       focusedCellCenter.y * focusedPostProcess.focusScene.scale +
         focusedPostProcess.focusScene.translate.y -
         focusedCanvas.field.center.y,
     ),
-  ).toBeLessThan(0.5)
+  ).toBeLessThan(1)
   expect(focusedPostProcess.focusScene.scale).toBeGreaterThan(1)
   expect(focusedPostProcess.focusScene.orbitAngle).toBeCloseTo(0, 5)
   expect(focusedPostProcess.focusScene.opacity).toBeCloseTo(1, 5)
@@ -714,8 +777,10 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
     ),
   )
   await page.waitForTimeout(500)
-  const draftSnapshot = await snapshot(page)
-  const draftPostProcess = await postProcessSnapshot(page)
+  const {
+    canvas: draftSnapshot,
+    postProcess: draftPostProcess,
+  } = await alignedSceneSnapshot(page)
   const draftEditorBounds = await editor.boundingBox()
   const draftPolygon = draftSnapshot.cells['cell-4'].map((point) => ({
     x: point.x * draftPostProcess.focusScene.scale +

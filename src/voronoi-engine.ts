@@ -3513,7 +3513,8 @@ export class VoronoiCanvasEngine {
     visual.label.visible =
       cell.kind !== 'seed' &&
       polygonArea(visual.currentPoints) > 1000 &&
-      textLayout.fits
+      textLayout.fits &&
+      this.state.editingId !== cell.id
     if (this.state.editingId === cell.id) {
       const editorTextLayout = layoutTextInPolygon(
         editingText,
@@ -3529,8 +3530,9 @@ export class VoronoiCanvasEngine {
         this.reducedMotion || Math.sin(this.lastFrameTime * Math.PI * 2) > -0.25
           ? 0.92
           : 0.18
-      visual.caretPath.visible = true
-      visual.caretPath.bringToFront()
+      // The active text is rendered by the geometrically aligned native
+      // textarea so browser selection, caret, and spellcheck stay exact.
+      visual.caretPath.visible = false
     } else {
       visual.caretPath.visible = false
     }

@@ -118,6 +118,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
 }, forwardedRef) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sourceSceneRef = useRef<HTMLDivElement>(null)
+  const viewportMaskRef = useRef<HTMLDivElement>(null)
   const postProcessCanvasRef = useRef<HTMLCanvasElement>(null)
   const wallTextureCanvasRef = useRef<HTMLCanvasElement>(null)
   const editorRef = useRef<HTMLTextAreaElement>(null)
@@ -170,10 +171,18 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       editor.style.left = `${layout.x}px`
       editor.style.top = `${layout.y}px`
     }
-    editor.style.width = `${Math.max(1, layout.width)}px`
-    editor.style.height = `${Math.max(1, layout.height)}px`
-    editor.style.fontSize = `${Math.max(6, layout.fontSize)}px`
-    editor.style.lineHeight = '1.35'
+    const width = Math.max(1, layout.width)
+    const height = Math.max(1, layout.height)
+    const fontSize = Math.max(6, layout.textLayout.fontSize || layout.fontSize)
+    const leading = Math.max(fontSize, layout.textLayout.leading)
+    const lineCount = Math.max(1, layout.textLayout.lines.length)
+    const blockPadding = Math.max(0, (height - leading * lineCount) / 2)
+    editor.style.width = `${width}px`
+    editor.style.height = `${height}px`
+    editor.style.fontSize = `${fontSize}px`
+    editor.style.lineHeight = `${leading}px`
+    editor.style.paddingBlock = `${blockPadding}px`
+    editor.style.paddingInline = '2px'
     if (activeEditing?.presentation === 'inline') {
       editor.style.opacity = '1'
       editor.style.filter = 'none'
@@ -569,6 +578,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     '--field-center-x': `${fieldBounds.center.x}px`,
     '--field-center-y': `${fieldBounds.center.y}px`,
     '--field-radius': `${fieldBounds.radius}px`,
+    '--circle-edge-feather': `${settings.effects.circle.edgeFeatherPx}px`,
   } as CSSProperties
 
   const applyFocusVisual = (progress: number) => {
@@ -621,6 +631,15 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       }
     }
     postProcessorRef.current?.setFocusScene(scene)
+    const edgeFeather =
+      settingsRef.current.effects.circle.edgeFeatherPx +
+      (settingsRef.current.effects.circle.focusEdgeFeatherPx -
+        settingsRef.current.effects.circle.edgeFeatherPx) *
+        bounded
+    viewportMaskRef.current?.style.setProperty(
+      '--circle-edge-feather',
+      `${edgeFeather}px`,
+    )
     const sourceScene = sourceSceneRef.current
     if (sourceScene) {
       const matrix = new DOMMatrix()
@@ -762,10 +781,12 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       </svg>
       <div className="microscope-view-track" data-testid="microscope-view-track">
         <div
+          ref={viewportMaskRef}
           className="microscope-viewport-mask"
           style={{
             clipPath: `circle(${fieldBounds.radius}px at ${fieldBounds.center.x}px ${fieldBounds.center.y}px)`,
-          }}
+            '--circle-edge-feather': `${settings.effects.circle.edgeFeatherPx}px`,
+          } as CSSProperties}
         >
           <div
             className={`microscope-scene ${focusedPresentation ? 'is-focus-editing' : ''} ${focusExiting ? 'is-focus-exiting' : ''}`}
@@ -830,7 +851,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
             spellCheck
             style={{
               '--editor-caret': settings.palette.text,
-              '--editor-selection': settings.palette.selectedTint,
+              '--editor-text': settings.palette.text,
             } as CSSProperties}
             onInput={(event) => {
               const value = event.currentTarget.value
@@ -848,10 +869,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
               )
             }
             onKeyDown={handleEditorKeyDown}
-            onPointerDown={(event) => {
-              stopEditorPointer(event)
-              moveEditorCaretToPointer(event)
-            }}
+            onPointerDown={stopEditorPointer}
           />
         </>
       )}

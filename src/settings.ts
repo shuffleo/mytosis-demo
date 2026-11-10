@@ -14,6 +14,8 @@ export interface CanvasSettings {
   effects: {
     circle: {
       grain: number
+      edgeFeatherPx: number
+      focusEdgeFeatherPx: number
     }
     vignette: VignetteSettings
     focusVignette: VignetteSettings
@@ -177,13 +179,26 @@ export interface CanvasSettings {
   }
 }
 
-export const SETTINGS_SCHEMA_VERSION = 13
+export const SETTINGS_SCHEMA_VERSION = 14
+
+const VERSION_13_FOCUS_VIGNETTE: VignetteSettings = {
+  enabled: true,
+  intensity: 0.78,
+  dim: 0.56,
+  blurRadius: 0.25,
+  rimWidth: 0.24,
+  softness: 0.08,
+  distortion: 0.001,
+  grain: 0.018,
+}
 
 export const defaultSettings: CanvasSettings = {
   schemaVersion: SETTINGS_SCHEMA_VERSION,
   effects: {
     circle: {
       grain: 0.04,
+      edgeFeatherPx: 20,
+      focusEdgeFeatherPx: 20,
     },
     vignette: {
       enabled: true,
@@ -197,13 +212,13 @@ export const defaultSettings: CanvasSettings = {
     },
     focusVignette: {
       enabled: true,
-      intensity: 0.78,
-      dim: 0.56,
-      blurRadius: 0.25,
-      rimWidth: 0.24,
-      softness: 0.08,
+      intensity: 1,
+      dim: 0.8,
+      blurRadius: 1,
+      rimWidth: 0.16,
+      softness: 0.02,
       distortion: 0.001,
-      grain: 0.018,
+      grain: 0.024,
     },
     lens: {
       enabled: true,
@@ -535,14 +550,29 @@ export function groupColorFor(settings: CanvasSettings, order: number) {
 }
 
 export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasSettings {
+  const sourceVersion = input?.schemaVersion ?? 0
   if (
     !input ||
-    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, SETTINGS_SCHEMA_VERSION].includes(
-      input.schemaVersion ?? 0,
+    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, SETTINGS_SCHEMA_VERSION].includes(
+      sourceVersion,
     )
   ) {
     return cloneSettings(defaultSettings)
   }
+  const legacyFocusVignette = input.effects?.focusVignette
+  const migrateVersion13FocusDefaults =
+    sourceVersion === 13 &&
+    legacyFocusVignette !== undefined &&
+    Object.entries(VERSION_13_FOCUS_VIGNETTE).every(
+      ([key, value]) =>
+        legacyFocusVignette[key as keyof VignetteSettings] === value,
+    )
+  const focusVignetteSource =
+    sourceVersion <= 12 && legacyFocusVignette === undefined
+      ? input.effects?.vignette
+      : migrateVersion13FocusDefaults
+        ? undefined
+        : legacyFocusVignette
   return {
     ...cloneSettings(defaultSettings),
     ...input,
@@ -552,7 +582,7 @@ export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasS
       vignette: { ...defaultSettings.effects.vignette, ...input.effects?.vignette },
       focusVignette: {
         ...defaultSettings.effects.focusVignette,
-        ...(input.effects?.focusVignette ?? input.effects?.vignette),
+        ...focusVignetteSource,
       },
       lens: { ...defaultSettings.effects.lens, ...input.effects?.lens },
       crt: { ...defaultSettings.effects.crt, ...input.effects?.crt },

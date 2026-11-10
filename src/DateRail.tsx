@@ -257,7 +257,7 @@ export function DateRail({
     { month: 'long', year: 'numeric' },
     locale,
   )
-  const todayIsVisible = railDays.includes(todayDayKey)
+  const todayIsSelected = activeDayKey === todayDayKey
 
   return (
     <section
@@ -404,7 +404,13 @@ export function DateRail({
           const selected = dayKey === activeDayKey
           const date = fromLocalDayKey(dayKey)
           return (
-            <div className={`date-rail__day is-${status}`} role="listitem" key={dayKey}>
+            <div
+              className={`date-rail__day is-${status} ${
+                dayKey === todayDayKey ? 'is-today' : ''
+              }`.trim()}
+              role="listitem"
+              key={dayKey}
+            >
               <button
                 type="button"
                 data-day-key={dayKey}
@@ -421,6 +427,9 @@ export function DateRail({
                 {' '}
                 <span className="date-rail__number">{date.getDate()}</span>
                 <span className="date-rail__marker" aria-hidden="true" />
+                {dayKey === todayDayKey && !todayIsSelected ? (
+                  <span className="date-rail__today-dot" aria-hidden="true" />
+                ) : null}
               </button>
             </div>
           )
@@ -428,13 +437,15 @@ export function DateRail({
       </div>
       <button
         type="button"
-        className={`date-rail__today ${todayIsVisible ? '' : 'is-visible'}`}
+        className={`date-rail__today ${todayIsSelected ? '' : 'is-visible'}`}
         data-testid="date-rail-today"
-        aria-hidden={todayIsVisible}
-        tabIndex={todayIsVisible ? -1 : 0}
-        disabled={disabled || todayIsVisible}
+        aria-label="Go to today"
+        aria-hidden={todayIsSelected}
+        tabIndex={todayIsSelected ? -1 : 0}
+        disabled={disabled || todayIsSelected}
         onClick={() => selectDay(todayDayKey)}
       >
+        <span className="date-rail__today-dot" aria-hidden="true" />
         Today
       </button>
     </section>
