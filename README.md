@@ -2,7 +2,7 @@
 
 An interactive Voronoi journal that turns reflective notes into a living microscope of cells, groups, and emergent connections.
 
-> **Live demo:** Not published yet. See [production deployment status](https://github.com/shuffleo/mytosis-demo/actions/workflows/deploy-cloudflare.yml). The workflow validates the app but skips the Cloudflare deploy until the required secrets are available, so no canonical live URL has been exposed.
+> [**Live demo →**](https://mytosis.shuffleo.workers.dev)
 
 ## Highlights
 
