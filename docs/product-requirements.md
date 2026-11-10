@@ -4,7 +4,7 @@
 
 **Document version:** 1.0  
 **Requirements through:** 2026-11-10  
-**Prototype:** `2026-offsite-ai-design-excercise`
+**Prototype:** `mytosis-demo`
 
 ## 1. Product definition
 
