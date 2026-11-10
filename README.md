@@ -15,6 +15,7 @@ Open the URL Vite prints, normally `http://localhost:5173`. The verified local s
 
 - [Product requirements and implementation ledger](docs/product-requirements.md)
 - [Voronoi data model and browser-local clustering plan](docs/voronoi-data-model-and-clustering.md)
+- [Cloudflare Workers deployment and rollback](docs/cloudflare-deployment.md)
 
 ## Interaction model
 
