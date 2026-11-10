@@ -38,6 +38,7 @@ declare global {
       dieSeed: () => boolean
       undo: () => boolean
       redo: () => boolean
+      caretIndexAt: (x: number, y: number) => number | null
       postProcess: () => PostProcessDebugSnapshot | null
       mapPostProcessPoint: (point: { x: number; y: number }) => { x: number; y: number }
     }
@@ -83,6 +84,7 @@ interface VoronoiStageProps {
   onPostProcessingStatus: (status: PostProcessStatus) => void
   onHistoryChanged: (canUndo: boolean, canRedo: boolean) => void
   onEditingChanged?: (editing: boolean) => void
+  onSelectionChanged?: (selectedCellIds: readonly string[]) => void
   onModeChanged?: (mode: CanvasMode) => void
 }
 
@@ -99,6 +101,7 @@ export interface VoronoiStageHandle {
   snapshot: () => VoronoiDebugSnapshot | null
   dieFirstSeed: () => boolean
   addCellAtCentroid: () => boolean
+  groupSelectedCells: () => boolean
 }
 
 export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(function VoronoiStage({
@@ -114,6 +117,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   onPostProcessingStatus,
   onHistoryChanged,
   onEditingChanged,
+  onSelectionChanged,
   onModeChanged,
 }, forwardedRef) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -124,6 +128,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const engineRef = useRef<VoronoiCanvasEngine>(null)
   const postProcessorRef = useRef<MicroscopePostProcessor>(null)
+  const onSelectionChangedRef = useRef(onSelectionChanged)
   const wallRendererRef = useRef<WallTextureRenderer>(null)
   const initialSettingsRef = useRef(settings)
   const initialDocumentRef = useRef(initialDocument)
@@ -146,6 +151,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const focusProgressRef = useRef(0)
   const focusMatrixRef = useRef<DOMMatrix | null>(null)
   const [selection, setSelection] = useState<string | null>(null)
+  const [selectionCount, setSelectionCount] = useState(0)
   const previousSeedAuditRequestRef = useRef(seedAuditRequest)
 
   const positionEditor = (layout: EditorLayout) => {
@@ -205,6 +211,28 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     engineRef.current?.updateEditingSelection(active.id, selectionIndex)
   }
 
+  const caretIndexForClientPoint = (x: number, y: number) => {
+    const layout = latestLayoutRef.current
+    if (!layout || !editingRef.current) return null
+    let sourcePoint = new DOMPoint(x, y)
+    try {
+      if (focusMatrixRef.current) {
+        sourcePoint = sourcePoint.matrixTransform(focusMatrixRef.current.inverse())
+      }
+    } catch {
+      return null
+    }
+    const mapped = postProcessorRef.current?.mapPointer({
+      x: sourcePoint.x,
+      y: sourcePoint.y,
+    }) ?? { x: sourcePoint.x, y: sourcePoint.y }
+    return nearestCaretIndex(layout.textLayout, mapped)
+  }
+
+  useEffect(() => {
+    onSelectionChangedRef.current = onSelectionChanged
+  }, [onSelectionChanged])
+
   useEffect(() => {
     const canvas = canvasRef.current
     const postProcessCanvas = postProcessCanvasRef.current
@@ -239,7 +267,11 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
           setFocusLayout(null)
           setFocusPhase('idle')
         },
-        onSelectionChanged: setSelection,
+        onSelectionChanged: (value, selectedCellIds) => {
+          setSelection(value)
+          setSelectionCount(selectedCellIds.length)
+          onSelectionChangedRef.current?.(selectedCellIds)
+        },
         onModeChanged,
         onCanvasChanged: (field, animated) => {
           const nextBounds = { center: { ...field.center }, radius: field.radius }
@@ -283,6 +315,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       dieSeed: () => engine.forceExpireFirstSeed(),
       undo: () => engine.undo(),
       redo: () => engine.redo(),
+      caretIndexAt: (x: number, y: number) => caretIndexForClientPoint(x, y),
       postProcess: () => postProcessor.getDebugSnapshot(),
       mapPostProcessPoint: (point: { x: number; y: number }) =>
         postProcessor.mapPointer(point),
@@ -419,6 +452,8 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       snapshot: () => engineRef.current?.getSnapshot() ?? null,
       dieFirstSeed: () => engineRef.current?.forceExpireFirstSeed() ?? false,
       addCellAtCentroid: () => engineRef.current?.addCellAtCentroid() ?? false,
+      groupSelectedCells: () =>
+        engineRef.current?.groupSelectedCells() ?? false,
     }),
     [],
   )
@@ -502,7 +537,13 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       engineRef.current?.handleKey(event.key)
       return
     }
-    if (mode === 'select' && event.key === 'Enter' && selection && !selection.startsWith('group:')) {
+    if (
+      mode === 'select' &&
+      event.key === 'Enter' &&
+      selectionCount === 1 &&
+      selection &&
+      !selection.startsWith('group:')
+    ) {
       event.preventDefault()
       engineRef.current?.startEditing(selection)
     }
@@ -516,24 +557,15 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     event: ReactPointerEvent<HTMLElement>,
   ) => {
     const editor = editorRef.current
-    const layout = latestLayoutRef.current
     const active = editingRef.current
-    if (!editor || !layout || !active) return
+    if (!editor || !active) return
     event.preventDefault()
     event.stopPropagation()
-    let sourcePoint = new DOMPoint(event.clientX, event.clientY)
-    try {
-      if (focusMatrixRef.current) {
-        sourcePoint = sourcePoint.matrixTransform(focusMatrixRef.current.inverse())
-      }
-    } catch {
-      // A transient zero-scale matrix can occur for one frame during resize.
-    }
-    const mapped = postProcessorRef.current?.mapPointer({
-      x: sourcePoint.x,
-      y: sourcePoint.y,
-    }) ?? { x: sourcePoint.x, y: sourcePoint.y }
-    setEditorCaretFromSourcePoint(mapped)
+    const selectionIndex = caretIndexForClientPoint(event.clientX, event.clientY)
+    if (selectionIndex === null) return
+    editor.focus({ preventScroll: true })
+    editor.setSelectionRange(selectionIndex, selectionIndex)
+    engineRef.current?.updateEditingSelection(active.id, selectionIndex)
   }
 
   const focusedPresentation = editing?.presentation === 'focused' || focusExiting
@@ -874,7 +906,11 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
         </>
       )}
       <div className="sr-only" aria-live="polite">
-        {selection ? `Cell ${selection} selected` : 'No cell selected'}
+        {selectionCount > 1
+          ? `${selectionCount} cells selected`
+          : selection
+            ? `Cell ${selection} selected`
+            : 'No cell selected'}
       </div>
     </main>
   )

@@ -18,16 +18,15 @@ test.beforeEach(async ({ page }) => {
 test('autogroup blocks all work, pulses geometry only, and cancels exactly', async ({ page }) => {
   await page.getByTestId('settings-toggle').click()
   const before = await serialized(page)
-  await page.getByTestId('tool-group').click()
   await expect(page.getByTestId('autogroup-toggle')).toHaveAttribute(
     'aria-label',
-    'Start local autogroup',
+    'Auto Group',
   )
   await page.getByTestId('autogroup-toggle').click()
   await expect(page.getByTestId('clustering-status')).toBeVisible()
   await expect(page.getByTestId('autogroup-toggle')).toHaveAttribute(
     'aria-label',
-    'Cancel autogroup',
+    'Cancel Auto Group',
   )
   await expect(page.getByTestId('tool-add')).toBeDisabled()
   await expect(page.getByTestId('settings-toggle')).toBeDisabled()
@@ -56,7 +55,6 @@ test('autogroup persists provenance, grows walls, and is one undoable command', 
   page,
 }) => {
   const before = await serialized(page)
-  await page.getByTestId('tool-group').click()
   await page.getByTestId('autogroup-toggle').click()
   await expect(page.getByTestId('clustering-status')).toBeVisible()
   await expect(page.getByTestId('clustering-status')).toBeHidden({ timeout: 10_000 })
@@ -131,7 +129,6 @@ test('autogroup persists provenance, grows walls, and is one undoable command', 
 test('expands an autogroup container after list insertion so every label still fits', async ({
   page,
 }) => {
-  await page.getByTestId('tool-group').click()
   await page.getByTestId('autogroup-toggle').click()
   await expect(page.getByTestId('clustering-status')).toBeHidden({ timeout: 10_000 })
 
@@ -430,6 +427,7 @@ test('exposes an accessible list view and toolbar history controls', async ({ pa
   await expect(page.getByTestId('history-undo')).toBeDisabled()
   const state = await debugSnapshot(page)
   if (!state) throw new Error('Missing debug state')
+  await page.getByTestId('tool-add').click()
   await page.mouse.click(state.field.center.x, state.field.center.y)
   const inlineEditor = page.getByTestId('cell-editor')
   await expect(inlineEditor).toHaveAttribute('data-presentation', 'inline')
@@ -440,6 +438,10 @@ test('exposes an accessible list view and toolbar history controls', async ({ pa
 
   await page.getByTestId('list-view-toggle').click()
   await expect(page.getByTestId('list-view')).toBeVisible()
+  await expect(page.getByTestId('return-microscope').locator('img')).toHaveAttribute(
+    'src',
+    '/assets/toolbar/microscope%20view.svg',
+  )
   const results = await new AxeBuilder({ page }).include('[data-testid="list-view"]').analyze()
   expect(results.violations).toEqual([])
 })

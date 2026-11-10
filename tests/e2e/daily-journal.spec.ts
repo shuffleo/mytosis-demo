@@ -257,11 +257,16 @@ test('clears persisted journal pages with the confirmation-backed sidebar reset'
   const pastKey = await past.getAttribute('data-day-key')
   if (!pastKey) throw new Error('Past day key is missing')
   await past.click()
+  await expect.poll(() => selectedDayKey(page)).toBe(pastKey)
   await page.locator('[data-list-cell]').first().fill('Temporary local journal data.')
   await page.getByTestId('date-calendar-trigger').click()
   await page.keyboard.press('Escape')
   await page.reload()
-  await page.locator(`.date-rail__day button[data-day-key="${pastKey}"]`).click()
+  const restoredPast = page.locator(
+    `.date-rail__day button[data-day-key="${pastKey}"]`,
+  )
+  await restoredPast.click()
+  await expect.poll(() => selectedDayKey(page)).toBe(pastKey)
   await expect(page.locator('[data-list-cell]').first()).toHaveValue(
     'Temporary local journal data.',
   )

@@ -16,117 +16,16 @@ import {
   type VoronoiDocument,
 } from './model'
 import { cloneSettings, defaultSettings } from './settings'
+import { ToolbarDock } from './ToolbarDock'
 import { VoronoiStage, type VoronoiStageHandle } from './VoronoiStage'
 import type { CanvasMode } from './voronoi-engine'
 import './App.css'
-
-function AddCellIcon() {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true">
-      <path d="M7 3.8 21 3.8 26 14 21 24.2 7 24.2 2 14Z" />
-      <path d="M14 9.2v9.6M9.2 14h9.6" />
-    </svg>
-  )
-}
-
-function SelectIcon() {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true">
-      <path d="m6.4 3.5 15.1 11.2-7.1 1.4-3.7 6.2Z" />
-      <path d="m15.1 16 4.3 6.8" />
-    </svg>
-  )
-}
-
-function GroupIcon() {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true">
-      <path d="m9.2 5.5 5.3 3.1v6.2l-5.3 3.1-5.3-3.1V8.6Z" />
-      <path d="m18.8 10.1 5.3 3.1v6.2l-5.3 3.1-5.3-3.1v-6.2Z" />
-      <path d="m13.8 13.6 3.7 2.1" />
-    </svg>
-  )
-}
-
-function MergeSplitIcon() {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true">
-      <path d="M4.2 14c0-4.4 3.2-7.8 7.3-7.8 2.3 0 4.2 1 5.5 2.6 1-.8 2.2-1.2 3.5-1.2 3.3 0 5.8 2.7 5.8 6.1s-2.5 6.1-5.8 6.1c-1.4 0-2.7-.5-3.7-1.4-1.3 1.9-3.2 3.4-5.8 3.4-3.9 0-6.8-3.4-6.8-7.8Z" />
-      <path d="M11.2 9.8 16.8 18.2M16.8 9.8 11.2 18.2" />
-    </svg>
-  )
-}
-
-function SproutIcon() {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true">
-      <path d="M14 23V12.5" />
-      <path d="M14 15.5c-5.8 0-8.1-3-8.3-7.5 5.1-.4 8.2 1.8 8.3 7.5Z" />
-      <path d="M14 12.5c5.3 0 7.5-2.7 7.7-6.8-4.8-.3-7.6 1.7-7.7 6.8Z" />
-    </svg>
-  )
-}
 
 function GearIcon() {
   return (
     <svg viewBox="0 0 28 28" aria-hidden="true">
       <path d="M11.4 3.6h5.2l.8 3 2.7 1.6 3-.8 2.6 4.5-2.2 2.2v3.1l2.2 2.2-2.6 4.5-3-.8-2.7 1.6-.8 3h-5.2l-.8-3-2.7-1.6-3 .8-2.6-4.5 2.2-2.2v-3.1l-2.2-2.2 2.6-4.5 3 .8 2.7-1.6Z" />
       <circle cx="14" cy="15.6" r="3.4" />
-    </svg>
-  )
-}
-
-function UndoIcon() {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true">
-      <path d="M10.5 8.2 5.4 13l5.1 4.8" />
-      <path d="M6 13h8.2c5.1 0 8.1 2.6 8.1 7" />
-    </svg>
-  )
-}
-
-function RedoIcon() {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true">
-      <path d="m17.5 8.2 5.1 4.8-5.1 4.8" />
-      <path d="M22 13h-8.2c-5.1 0-8.1 2.6-8.1 7" />
-    </svg>
-  )
-}
-
-function AutogroupIcon({ cancelling = false }: { cancelling?: boolean }) {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true">
-      {cancelling ? (
-        <path d="M8 8h12v12H8Z" />
-      ) : (
-        <>
-          <circle cx="9" cy="9" r="3.2" />
-          <circle cx="19" cy="10.5" r="3.2" />
-          <circle cx="13.5" cy="19" r="3.2" />
-          <path d="m11.8 10 4.1.7M10.8 11.8l1.8 4.1m4.4-2.6-1.9 3.2" />
-        </>
-      )}
-    </svg>
-  )
-}
-
-function ListViewIcon({ returning = false }: { returning?: boolean }) {
-  return (
-    <svg viewBox="0 0 28 28" aria-hidden="true">
-      {returning ? (
-        <>
-          <path d="M6 14h16M14 6v16" />
-          <path d="M4.5 9.3 14 3.8l9.5 5.5v9.4L14 24.2l-9.5-5.5Z" />
-        </>
-      ) : (
-        <>
-          <circle cx="6.5" cy="8" r="1.2" />
-          <circle cx="6.5" cy="14" r="1.2" />
-          <circle cx="6.5" cy="20" r="1.2" />
-          <path d="M11 8h11M11 14h11M11 20h8" />
-        </>
-      )}
     </svg>
   )
 }
@@ -160,8 +59,8 @@ function App() {
   const stageRef = useRef<VoronoiStageHandle>(null)
   const clusterAbortRef = useRef<AbortController | null>(null)
   const panelBeforeClusterRef = useRef(false)
-  const [mode, setMode] = useState<CanvasMode>('add')
-  const [focusedEditing, setFocusedEditing] = useState(false)
+  const [mode, setMode] = useState<CanvasMode>('select')
+  const [selectedCellIds, setSelectedCellIds] = useState<string[]>([])
   const [view, setView] = useState<'microscope' | 'list'>(() =>
     new URLSearchParams(window.location.search).get('view') === 'microscope'
       ? 'microscope'
@@ -307,6 +206,7 @@ function App() {
       setListDocument(deserializeDocument(serialized))
       setListDirty(false)
       setHistoryState({ canUndo: false, canRedo: false })
+      setSelectedCellIds([])
       stageRef.current?.loadDocument(serialized)
     }
     if (
@@ -352,8 +252,8 @@ function App() {
     setSettings(cloneSettings(nextDocument.settings))
     setContentDayKeys(journalSession.store.contentDayKeys())
     setHistoryState({ canUndo: false, canRedo: false })
-    setMode('add')
-    setFocusedEditing(false)
+    setMode('select')
+    setSelectedCellIds([])
     setPanelOpen(false)
     setView('list')
     stageRef.current?.loadDocument(serialized)
@@ -497,29 +397,6 @@ function App() {
       }
     }
   }
-  const tools = ([
-    { mode: 'add', label: 'Add Cell', icon: <AddCellIcon /> },
-    { mode: 'select', label: 'Select', icon: <SelectIcon /> },
-    { mode: 'group', label: 'Group', icon: <GroupIcon /> },
-    {
-      mode: 'merge',
-      label: 'Merge / Split',
-      icon: <MergeSplitIcon />,
-      disabled: !settings.mergeSplit.enabled || clusteringActive,
-    },
-  ] satisfies Array<{
-    mode: CanvasMode
-    label: string
-    icon: React.ReactNode
-    disabled?: boolean
-  }>)
-    .filter((tool) => tool.mode !== 'merge' || !settings.mergeSplit.newSelect)
-    .filter(
-      (tool) =>
-        !focusedEditing ||
-        (tool.mode !== 'add' && tool.mode !== 'group' && tool.mode !== 'merge'),
-    )
-
   const transitionStyle = {
     '--view-phase-duration': `${Math.max(150, settings.viewTransition.durationMs / 2)}ms`,
     '--view-transition-blur': `${settings.viewTransition.blurPx}px`,
@@ -554,8 +431,8 @@ function App() {
         clusteringWave={clusteringActive}
         onPostProcessingStatus={setPostProcessingStatus}
         onHistoryChanged={handleHistoryChanged}
-        onEditingChanged={setFocusedEditing}
         onModeChanged={setMode}
+        onSelectionChanged={(ids) => setSelectedCellIds([...ids])}
       />
       {view === 'list' && listDocument && (
         <ListEditor
@@ -576,154 +453,37 @@ function App() {
           disabled={clusteringActive || transitionActive}
         />
       </div>
-      <nav aria-label={view === 'list' ? 'Return to microscope' : 'Canvas controls'}>
-        <div
-          className={`tool-dock ${view === 'list' ? 'list-only-dock' : ''}`}
-          role="toolbar"
-          aria-label={view === 'list' ? 'List view controls' : 'Canvas tools'}
-        >
-          {view === 'list' ? (
-            <>
-              <div className="history-toolbar" role="group" aria-label="Journal history">
-                <button
-                  className="icon-tool-button"
-                  data-testid="history-undo"
-                  type="button"
-                  aria-label="Undo"
-                  title="Undo (⌘/Ctrl-Z)"
-                  disabled={(!historyState.canUndo && !listDirty) || transitionActive}
-                  onClick={() => requestHistory('undo')}
-                >
-                  <UndoIcon />
-                </button>
-                <button
-                  className="icon-tool-button"
-                  data-testid="history-redo"
-                  type="button"
-                  aria-label="Redo"
-                  title="Redo (Shift-⌘/Ctrl-Z)"
-                  disabled={!historyState.canRedo || listDirty || transitionActive}
-                  onClick={() => requestHistory('redo')}
-                >
-                  <RedoIcon />
-                </button>
-              </div>
-              <span className="toolbar-divider" aria-hidden="true" />
-              <button
-                className="tool-button return-microscope-button is-active"
-                data-testid="return-microscope"
-                type="button"
-                aria-label="Return to microscope view"
-                data-tooltip="Return to microscope"
-                title="Return to microscope"
-                disabled={transitionActive}
-                onClick={closeListView}
-              >
-                <ListViewIcon returning />
-              </button>
-            </>
-          ) : (
-            <>
-              <div className="history-toolbar" role="group" aria-label="Canvas history">
-                <button
-                  className="icon-tool-button"
-                  data-testid="history-undo"
-                  type="button"
-                  aria-label="Undo"
-                  data-tooltip="Undo"
-                  title="Undo (⌘/Ctrl-Z)"
-                  disabled={!historyState.canUndo || clusteringActive || transitionActive}
-                  onClick={() => requestHistory('undo')}
-                >
-                  <UndoIcon />
-                </button>
-                <button
-                  className="icon-tool-button"
-                  data-testid="history-redo"
-                  type="button"
-                  aria-label="Redo"
-                  data-tooltip="Redo"
-                  title="Redo (Shift-⌘/Ctrl-Z)"
-                  disabled={!historyState.canRedo || clusteringActive || transitionActive}
-                  onClick={() => requestHistory('redo')}
-                >
-                  <RedoIcon />
-                </button>
-              </div>
-              <span className="toolbar-divider" aria-hidden="true" />
-              {tools.map((tool) => (
-                <button
-                  key={tool.mode}
-                  className={`tool-button ${mode === tool.mode ? 'is-active' : ''}`}
-                  data-testid={`tool-${tool.mode}`}
-                  type="button"
-                  aria-label={tool.label}
-                  aria-pressed={mode === tool.mode}
-                  data-tooltip={tool.label}
-                  title={tool.label}
-                  disabled={tool.disabled || clusteringActive || transitionActive}
-                  onClick={() => {
-                    if (tool.mode === 'add' && mode === 'add') {
-                      stageRef.current?.addCellAtCentroid()
-                    } else {
-                      setMode(tool.mode)
-                    }
-                  }}
-                >
-                  {tool.icon}
-                  <span>{tool.label}</span>
-                </button>
-              ))}
-            </>
-          )}
-          {view === 'microscope' && mode === 'add' && !focusedEditing && (
-            <button
-              className={`sprout-toggle ${autoGrowth ? 'is-active' : ''}`}
-              data-testid="sprout-toggle"
-              type="button"
-              aria-label="Toggle auto-growth"
-              aria-pressed={autoGrowth}
-              data-tooltip={autoGrowth ? 'Auto-growth on' : 'Auto-growth off'}
-              title={autoGrowth ? 'Auto-growth on' : 'Auto-growth off'}
-              disabled={clusteringActive || transitionActive}
-              onClick={() => setAutoGrowth((current) => !current)}
-            >
-              <SproutIcon />
-            </button>
-          )}
-          {view === 'microscope' && mode === 'group' && !focusedEditing && (
-            <button
-              className={`sprout-toggle autogroup-toggle ${clusteringActive ? 'is-active' : ''}`}
-              data-testid="autogroup-toggle"
-              type="button"
-              aria-label={clusteringActive ? 'Cancel autogroup' : 'Start local autogroup'}
-              aria-pressed={clusteringActive}
-              data-tooltip={clusteringActive ? 'Cancel' : 'Autogroup'}
-              title={clusteringActive ? 'Cancel clustering' : 'Autogroup locally'}
-              disabled={transitionActive}
-              onClick={startClustering}
-            >
-              <AutogroupIcon cancelling={clusteringActive} />
-            </button>
-          )}
-          {view === 'microscope' && !clusteringActive && !transitionActive && (
-            <>
-              <span className="toolbar-divider" aria-hidden="true" />
-              <button
-                className="icon-tool-button list-view-toggle"
-                data-testid="list-view-toggle"
-                type="button"
-                aria-label="Open bullet list view"
-                data-tooltip="Bullet list"
-                title="Bullet list view"
-                onClick={openListView}
-              >
-                <ListViewIcon />
-              </button>
-            </>
-          )}
-        </div>
-      </nav>
+      <ToolbarDock
+        viewMode={view}
+        activeTool={mode === 'add' ? 'addCell' : 'select'}
+        selectionCount={selectedCellIds.length}
+        cultivateOn={autoGrowth}
+        clusteringActive={clusteringActive}
+        transitionActive={transitionActive}
+        canUndo={historyState.canUndo}
+        canRedo={historyState.canRedo}
+        listDirty={listDirty}
+        onUndo={() => requestHistory('undo')}
+        onRedo={() => requestHistory('redo')}
+        onSelect={() => setMode('select')}
+        onAddCell={() => {
+          if (mode === 'add') stageRef.current?.addCellAtCentroid()
+          else setMode('add')
+        }}
+        onGroupAction={() => {
+          if (selectedCellIds.length > 1) {
+            if (stageRef.current?.groupSelectedCells()) {
+              setSelectedCellIds([])
+              setMode('select')
+            }
+            return
+          }
+          void startClustering()
+        }}
+        onCultivate={() => setAutoGrowth((current) => !current)}
+        onOpenList={openListView}
+        onReturnMicroscope={closeListView}
+      />
 
       {viewTransition && <div className="view-transition-curtain" aria-hidden="true" />}
 

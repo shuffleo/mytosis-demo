@@ -172,6 +172,7 @@ interface InteractionState {
   mode: CanvasMode
   hoveredId: string | null
   selectedCellId: string | null
+  selectedCellIds: string[]
   selectedGroupId: string | null
   editingId: string | null
   acquiringGroupId: string | null
@@ -223,7 +224,10 @@ export interface EngineCallbacks {
   onEditorLayout: (layout: EditorLayout) => void
   onEditorPointer: (point: Point2) => void
   onInlineEditingFinished: () => void
-  onSelectionChanged: (selection: string | null) => void
+  onSelectionChanged: (
+    selection: string | null,
+    selectedCellIds: readonly string[],
+  ) => void
   onModeChanged?: (mode: CanvasMode) => void
   onCanvasChanged?: (field: CanvasFieldBounds, animated: boolean) => void
   onHistoryChanged?: (canUndo: boolean, canRedo: boolean) => void
@@ -252,6 +256,7 @@ export interface VoronoiDebugSnapshot {
   previewId: string | null
   hoveredId: string | null
   selectedId: string | null
+  selectedIds: string[]
   selectedGroupId: string | null
   editingId: string | null
   editingCaretIndex: number
@@ -364,6 +369,7 @@ export class VoronoiCanvasEngine {
     mode: 'add',
     hoveredId: null,
     selectedCellId: null,
+    selectedCellIds: [],
     selectedGroupId: null,
     editingId: null,
     acquiringGroupId: null,
@@ -609,6 +615,29 @@ export class VoronoiCanvasEngine {
     this.clearSelection()
     this.sourceDirtyToken += 1
     this.notifyHistoryChanged()
+    return true
+  }
+
+  groupSelectedCells() {
+    const cells = this.state.selectedCellIds
+      .map((id) => this.findCell(id))
+      .filter(
+        (cell): cell is CellEntity =>
+          Boolean(cell && cell.kind === 'journal' && !cell.groupId),
+      )
+    if (cells.length < 2 || this.model.groups.length >= 8) return false
+    this.checkpoint('group-selection')
+    const group = this.createManualGroup(cells[0])
+    if (!group) {
+      this.history.discardLastCheckpoint()
+      return false
+    }
+    for (const cell of cells) this.attachCellToGroup(cell, group)
+    this.state.acquiringGroupId = null
+    this.clearSelection()
+    this.sourceDirtyToken += 1
+    this.notifyHistoryChanged()
+    this.updateCanvasState()
     return true
   }
 
@@ -923,6 +952,7 @@ export class VoronoiCanvasEngine {
       previewId: this.state.preview?.id ?? null,
       hoveredId: this.state.hoveredId,
       selectedId: this.state.selectedCellId,
+      selectedIds: [...this.state.selectedCellIds],
       selectedGroupId: this.state.selectedGroupId,
       editingId: this.state.editingId,
       editingCaretIndex: this.editingSelectionIndex,
@@ -1317,6 +1347,13 @@ export class VoronoiCanvasEngine {
     }
     if (!hit || !hitCell) {
       this.clearSelection()
+      return
+    }
+
+    if (event.modifiers.shift && !hitCell.groupId) {
+      this.toggleCellSelection(hitCell.id)
+      this.state.gesture = null
+      this.updateCanvasState()
       return
     }
 
@@ -1747,40 +1784,48 @@ export class VoronoiCanvasEngine {
       ? this.model.groups.find((candidate) => candidate.id === this.state.acquiringGroupId)
       : undefined
     if (!group) {
-      if (this.model.groups.length >= 8) return
-      const id = `group-${this.model.layout.nextGroupNumber}`
-      const order = this.model.layout.nextGroupNumber
-      const normalizedWallPadding =
-        (this.settings.group.wallThickness +
-          this.settings.group.wallGap +
-          this.settings.geometry.seamGap) /
-        Math.max(1, this.fieldRadius)
-      const preferredWeight =
-        cell.weight + Math.max(0.014, normalizedWallPadding * 0.4)
-      group = {
-        id,
-        memberIds: [],
-        wall: {
-          gap: this.settings.group.wallGap,
-          thickness: this.settings.group.wallThickness,
-        },
-        style: { tint: groupColorFor(this.settings, order) },
-        container: {
-          site: { ...cell.site },
-          weight: Math.max(0.022, preferredWeight),
-          preferredWeight: Math.max(0.022, preferredWeight),
-        },
-        title: reflectiveContentProvider.groupTitle([{ id: cell.id, text: cell.text }]).text,
-        provenance: { source: 'manual' },
-        order,
-      }
-      this.model.layout.nextGroupNumber += 1
-      this.model.groups.push(group)
-      this.state.acquiringGroupId = id
+      group = this.createManualGroup(cell) ?? undefined
+      if (!group) return
+      this.state.acquiringGroupId = group.id
     }
     this.attachCellToGroup(cell, group)
     this.selectGroup(group.id)
     this.updateCanvasState()
+  }
+
+  private createManualGroup(cell: CellEntity) {
+    if (this.model.groups.length >= 8) return null
+    const id = `group-${this.model.layout.nextGroupNumber}`
+    const order = this.model.layout.nextGroupNumber
+    const normalizedWallPadding =
+      (this.settings.group.wallThickness +
+        this.settings.group.wallGap +
+        this.settings.geometry.seamGap) /
+      Math.max(1, this.fieldRadius)
+    const preferredWeight =
+      cell.weight + Math.max(0.014, normalizedWallPadding * 0.4)
+    const group: GroupEntity = {
+      id,
+      memberIds: [],
+      wall: {
+        gap: this.settings.group.wallGap,
+        thickness: this.settings.group.wallThickness,
+      },
+      style: { tint: groupColorFor(this.settings, order) },
+      container: {
+        site: { ...cell.site },
+        weight: Math.max(0.022, preferredWeight),
+        preferredWeight: Math.max(0.022, preferredWeight),
+      },
+      title: reflectiveContentProvider.groupTitle([
+        { id: cell.id, text: cell.text },
+      ]).text,
+      provenance: { source: 'manual' },
+      order,
+    }
+    this.model.layout.nextGroupNumber += 1
+    this.model.groups.push(group)
+    return group
   }
 
   private attachCellToGroup(cell: CellEntity, group: GroupEntity) {
@@ -1966,9 +2011,10 @@ export class VoronoiCanvasEngine {
       )
     }
     this.state.selectedCellId = id
+    this.state.selectedCellIds = [id]
     this.state.selectedGroupId = null
     this.state.hoveredId = null
-    this.callbacks.onSelectionChanged(id)
+    this.notifySelectionChanged()
     this.sourceDirtyToken += 1
   }
 
@@ -2065,8 +2111,11 @@ export class VoronoiCanvasEngine {
     )
     this.model.layout.nextCellNumber += created.length
     this.state.selectedCellId = created[0]?.id ?? null
+    this.state.selectedCellIds = this.state.selectedCellId
+      ? [this.state.selectedCellId]
+      : []
     this.state.hoveredId = null
-    this.callbacks.onSelectionChanged(this.state.selectedCellId)
+    this.notifySelectionChanged()
     this.state.gesture = null
     this.sourceDirtyToken += 1
   }
@@ -2077,7 +2126,7 @@ export class VoronoiCanvasEngine {
     const candidates = this.model.cells.filter(
       (cell) => cell.kind === 'journal' && !cell.groupId,
     )
-    const triples = findDelaunayTriples(
+    const allTriples = findDelaunayTriples(
       candidates.map((cell) => ({ id: cell.id, x: cell.site.x, y: cell.site.y })),
     ).filter((triple) => {
       const distanceFromCenter = Math.hypot(triple.circumcenter.x, triple.circumcenter.y)
@@ -2086,6 +2135,14 @@ export class VoronoiCanvasEngine {
       )
       return distanceFromCenter < 0.88 && triple.radius < 0.62 && notCrowded
     })
+    const selected = new Set(this.state.selectedCellIds)
+    const selectedSeams =
+      selected.size > 1
+        ? allTriples.filter(
+            (triple) => triple.ids.filter((id) => selected.has(id)).length >= 2,
+          )
+        : []
+    const triples = selectedSeams.length > 0 ? selectedSeams : allTriples
     if (triples.length === 0) return false
     const triple = triples[Math.floor(this.random() * triples.length) % triples.length]
     const sources = triple.ids
@@ -2363,7 +2420,7 @@ export class VoronoiCanvasEngine {
         continue
       }
       const active =
-        this.state.selectedCellId === cell.id ||
+        this.state.selectedCellIds.includes(cell.id) ||
         this.state.hoveredId === cell.id ||
         this.state.editingId === cell.id ||
         (this.state.gesture &&
@@ -2902,7 +2959,7 @@ export class VoronoiCanvasEngine {
         continue
       }
       weight += (combinedScale - 1) * 0.055
-      if (cell.id === this.state.selectedCellId) weight += 0.003
+      if (this.state.selectedCellIds.includes(cell.id)) weight += 0.003
       if (cell.id === activeMergeTargetId) weight += 0.024
       const requiredArea = (textRequirements.get(cell.id) ?? 0) * this.crowdingScale
       const requiredWeight =
@@ -3175,6 +3232,7 @@ export class VoronoiCanvasEngine {
     mix(this.fieldOuterRadius, 1)
     mix(this.sourceDirtyToken, 1)
     mixText(this.state.selectedCellId ?? '')
+    for (const id of this.state.selectedCellIds) mixText(id)
     mixText(this.state.selectedGroupId ?? '')
     mixText(this.state.editingId ?? '')
     for (const [id, visual] of this.visuals) {
@@ -4066,7 +4124,7 @@ export class VoronoiCanvasEngine {
         interactionTint,
       )
     }
-    if (cell.id === this.state.selectedCellId) {
+    if (this.state.selectedCellIds.includes(cell.id)) {
       return this.mixColor(base, this.settings.palette.selectedTint, 0.48)
     }
     if (cell.groupId && this.state.selectedGroupId === cell.groupId) {
@@ -4142,20 +4200,45 @@ export class VoronoiCanvasEngine {
     const cell = this.findCell(cellId)
     if (cell && this.state.mode === 'select') this.revealIncubation(cell)
     this.state.selectedCellId = cellId
+    this.state.selectedCellIds = [cellId]
     this.state.selectedGroupId = null
-    this.callbacks.onSelectionChanged(cellId)
+    this.notifySelectionChanged()
+  }
+
+  private toggleCellSelection(cellId: string) {
+    const cell = this.findCell(cellId)
+    if (!cell || cell.kind === 'seed') return
+    const selected = new Set(this.state.selectedCellIds)
+    if (selected.has(cellId)) selected.delete(cellId)
+    else selected.add(cellId)
+    this.state.selectedCellIds = [...selected]
+    this.state.selectedCellId =
+      this.state.selectedCellIds.length === 1 ? this.state.selectedCellIds[0] : null
+    this.state.selectedGroupId = null
+    this.notifySelectionChanged()
   }
 
   private selectGroup(groupId: string) {
     this.state.selectedGroupId = groupId
     this.state.selectedCellId = null
-    this.callbacks.onSelectionChanged(`group:${groupId}`)
+    this.state.selectedCellIds = []
+    this.notifySelectionChanged()
   }
 
   private clearSelection() {
     this.state.selectedCellId = null
+    this.state.selectedCellIds = []
     this.state.selectedGroupId = null
-    this.callbacks.onSelectionChanged(null)
+    this.notifySelectionChanged()
+  }
+
+  private notifySelectionChanged() {
+    const selection =
+      this.state.selectedCellIds.length > 1
+        ? `multi:${this.state.selectedCellIds.join(',')}`
+        : this.state.selectedCellId ??
+          (this.state.selectedGroupId ? `group:${this.state.selectedGroupId}` : null)
+    this.callbacks.onSelectionChanged(selection, [...this.state.selectedCellIds])
   }
 
   private resizeCursor(direction?: Point2) {
@@ -4172,6 +4255,7 @@ export class VoronoiCanvasEngine {
     )
     this.canvas.dataset.preview = this.state.preview ? 'true' : 'false'
     this.canvas.dataset.selected = this.state.selectedCellId ?? ''
+    this.canvas.dataset.selectedCount = String(this.state.selectedCellIds.length)
     this.canvas.dataset.selectedGroup = this.state.selectedGroupId ?? ''
     this.canvas.dataset.editing = this.state.editingId ?? ''
     this.canvas.dataset.autoGrowth = String(this.autoGrowth)
