@@ -5,10 +5,16 @@ async function visibleCellPoint(page: Page, cellId: string) {
   const state = await page.evaluate(() => window.__VORONOI_DEBUG__?.snapshot())
   const cell = state?.model.cells.find((candidate) => candidate.id === cellId)
   if (!state || !cell) throw new Error(`Missing cell ${cellId}`)
-  const source = {
-    x: state.field.center.x + cell.site.x * state.field.radius,
-    y: state.field.center.y + cell.site.y * state.field.radius,
-  }
+  const polygon = state.cells[cellId]
+  const source = polygon?.length
+    ? {
+        x: polygon.reduce((sum, point) => sum + point.x, 0) / polygon.length,
+        y: polygon.reduce((sum, point) => sum + point.y, 0) / polygon.length,
+      }
+    : {
+        x: state.field.center.x + cell.site.x * state.field.radius,
+        y: state.field.center.y + cell.site.y * state.field.radius,
+      }
   let visible = { ...source }
   for (let iteration = 0; iteration < 8; iteration += 1) {
     const mapped = await page.evaluate(
@@ -161,6 +167,67 @@ test('preserves independent pages when switching dates', async ({ page }) => {
   )
 })
 
+test('travels through days directionally and supports wheel plus Today recovery', async ({
+  page,
+}) => {
+  const todayKey = await selectedDayKey(page)
+  const past = await nearestPastDay(page, todayKey)
+  const pastKey = await past.getAttribute('data-day-key')
+  if (!pastKey) throw new Error('Past day key is missing')
+
+  await past.click()
+  await expect(page.locator('.app-shell')).toHaveClass(/date-transition-backward-/)
+  await expect.poll(() => selectedDayKey(page)).toBe(pastKey)
+  await expect(page.locator('.app-shell')).not.toHaveClass(/date-transition-/)
+
+  await page.getByTestId('date-rail').dispatchEvent('wheel', { deltaY: 80 })
+  await expect(page.locator('.app-shell')).toHaveClass(/date-transition-forward-/)
+  await expect.poll(() => selectedDayKey(page)).toBe(todayKey)
+
+  await expect(page.locator('.app-shell')).not.toHaveClass(/date-transition-/)
+  const earliestVisible = page.locator('.date-rail__day button:not(:disabled)').first()
+  const earliestKey = await earliestVisible.getAttribute('data-day-key')
+  if (!earliestKey) throw new Error('Earliest visible day is missing')
+  await earliestVisible.click()
+  await expect.poll(() => selectedDayKey(page)).toBe(earliestKey)
+  await expect(page.locator('.app-shell')).not.toHaveClass(/date-transition-/)
+  const nextEarliestVisible = page.locator('.date-rail__day button:not(:disabled)').first()
+  const nextEarliestKey = await nextEarliestVisible.getAttribute('data-day-key')
+  if (!nextEarliestKey) throw new Error('Next earliest visible day is missing')
+  await nextEarliestVisible.click()
+  await expect.poll(() => selectedDayKey(page)).toBe(nextEarliestKey)
+  const todayButton = page.getByTestId('date-rail-today')
+  await expect(todayButton).toBeVisible()
+  await expect(todayButton).toBeEnabled()
+  await todayButton.click()
+  await expect.poll(() => selectedDayKey(page)).toBe(todayKey)
+})
+
+test('keeps a selected microscope palette global across day pages', async ({ page }) => {
+  await page.getByTestId('return-microscope').click()
+  await expect(page.getByTestId('voronoi-canvas')).toBeVisible()
+  await page.getByTestId('settings-toggle').click()
+  await page.getByText('Palette', { exact: true }).click()
+  await page.getByLabel('preset').selectOption({
+    label: 'Organelle night · Violet / viridian',
+  })
+  const expectedExterior = await page.evaluate(
+    () => window.__VORONOI_DEBUG__!.snapshot().settings.palette.exterior,
+  )
+  await page.getByTestId('settings-toggle').click()
+
+  const todayKey = await selectedDayKey(page)
+  const past = await nearestPastDay(page, todayKey)
+  await past.click()
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__VORONOI_DEBUG__!.snapshot().settings.palette.exterior,
+      ),
+    )
+    .toBe(expectedExterior)
+})
+
 test('clears persisted journal pages with the confirmation-backed sidebar reset', async ({
   page,
 }) => {
@@ -260,11 +327,29 @@ test('opens an empty microscope day in inline typing mode without model drift', 
   const before = await page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot())
   const cell = before.model.cells.find((candidate) => candidate.kind === 'journal')
   if (!cell) throw new Error('Empty date cell is missing')
+  expect(before.textLayouts[cell.id]?.lineCount).toBeGreaterThan(0)
+  await expect(page.getByTestId('focus-edit-dismiss')).toHaveCount(0)
+  await expect(page.getByTestId('voronoi-canvas')).toHaveCSS('cursor', 'default')
   const draft = Array.from(
     { length: 32 },
     (_, index) => `growing thought ${index + 1}`,
   ).join(' ')
   await editor.fill(draft)
+  const editorBox = await editor.boundingBox()
+  if (!editorBox) throw new Error('Inline editor bounds are missing')
+  await page.mouse.click(
+    editorBox.x + editorBox.width * 0.28,
+    editorBox.y + editorBox.height * 0.5,
+  )
+  const firstCaret = await editor.evaluate((element) => element.selectionStart)
+  await page.mouse.click(
+    editorBox.x + editorBox.width * 0.72,
+    editorBox.y + editorBox.height * 0.5,
+  )
+  const secondCaret = await editor.evaluate((element) => element.selectionStart)
+  expect(secondCaret).not.toBe(firstCaret)
+  expect((await page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot())).editingCaretIndex)
+    .toBe(secondCaret)
   const during = await page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot())
   expect(during.model.cells.find((candidate) => candidate.id === cell.id)?.site).toEqual(
     cell.site,
@@ -281,6 +366,49 @@ test('opens an empty microscope day in inline typing mode without model drift', 
       ),
     )
     .toBe(true)
+})
+
+test('maps focused clicks to the rendered caret and keeps inline outside clicks selectable', async ({
+  page,
+}) => {
+  await page.goto('/?view=microscope')
+  await page.getByTestId('tool-select').click()
+  const focusedPoint = await visibleCellPoint(page, 'cell-4')
+  await page.mouse.dblclick(focusedPoint.x, focusedPoint.y, { delay: 70 })
+  const focusedEditor = page.getByTestId('cell-editor')
+  await focusedEditor.fill('alpha beta gamma delta epsilon')
+  const focusedBox = await focusedEditor.boundingBox()
+  if (!focusedBox) throw new Error('Focused editor bounds are missing')
+  await page.mouse.click(
+    focusedBox.x + focusedBox.width * 0.25,
+    focusedBox.y + focusedBox.height * 0.5,
+  )
+  const focusedSelection = await focusedEditor.evaluate(
+    (element) => element.selectionStart,
+  )
+  expect(focusedSelection).toBeLessThan('alpha beta gamma delta epsilon'.length)
+  expect(
+    (await page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot()))
+      .editingCaretIndex,
+  ).toBe(focusedSelection)
+  await page.getByTestId('focus-edit-dismiss').click({ position: { x: 2, y: 2 } })
+
+  await page.getByTestId('tool-add').click()
+  const field = await page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot().field)
+  await page.mouse.click(field.center.x, field.center.y)
+  const inlineEditor = page.getByTestId('cell-editor')
+  await expect(inlineEditor).toHaveAttribute('data-presentation', 'inline')
+  await expect(page.getByTestId('focus-edit-dismiss')).toHaveCount(0)
+  const originalCell = await visibleCellPoint(page, 'cell-1')
+  await page.mouse.click(originalCell.x, originalCell.y)
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot().selectedId),
+    )
+    .not.toBe('cell-13')
+  expect(
+    await page.evaluate(() => window.__VORONOI_DEBUG__!.snapshot().selectedId),
+  ).not.toBeNull()
 })
 
 test('popup calendar supports keyboard navigation and passes accessibility checks', async ({

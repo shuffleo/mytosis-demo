@@ -1,19 +1,22 @@
+export interface VignetteSettings {
+  enabled: boolean
+  intensity: number
+  dim: number
+  blurRadius: number
+  rimWidth: number
+  softness: number
+  distortion: number
+  grain: number
+}
+
 export interface CanvasSettings {
   schemaVersion: number
   effects: {
     circle: {
       grain: number
     }
-    vignette: {
-      enabled: boolean
-      intensity: number
-      dim: number
-      blurRadius: number
-      rimWidth: number
-      softness: number
-      distortion: number
-      grain: number
-    }
+    vignette: VignetteSettings
+    focusVignette: VignetteSettings
     lens: {
       enabled: boolean
       shape: 'sphere'
@@ -77,6 +80,9 @@ export interface CanvasSettings {
     incubationDelayMs: number
     incubationGrowthMs: number
     incubationBlur: number
+    incubationWigglePx: number
+    incubationWiggleHz: number
+    incubationWiggleEasing: 'smooth' | 'spring' | 'linear'
     stickyEnabled: boolean
     blobSizePx: number
     stickyDistancePx: number
@@ -171,7 +177,7 @@ export interface CanvasSettings {
   }
 }
 
-export const SETTINGS_SCHEMA_VERSION = 12
+export const SETTINGS_SCHEMA_VERSION = 13
 
 export const defaultSettings: CanvasSettings = {
   schemaVersion: SETTINGS_SCHEMA_VERSION,
@@ -188,6 +194,16 @@ export const defaultSettings: CanvasSettings = {
       softness: 0.06,
       distortion: 0.002,
       grain: 0.024,
+    },
+    focusVignette: {
+      enabled: true,
+      intensity: 0.78,
+      dim: 0.56,
+      blurRadius: 0.25,
+      rimWidth: 0.24,
+      softness: 0.08,
+      distortion: 0.001,
+      grain: 0.018,
     },
     lens: {
       enabled: true,
@@ -251,7 +267,10 @@ export const defaultSettings: CanvasSettings = {
     sizeRatio: 0.125,
     incubationDelayMs: 3000,
     incubationGrowthMs: 2400,
-    incubationBlur: 8,
+    incubationBlur: 16,
+    incubationWigglePx: 0.8,
+    incubationWiggleHz: 1.6,
+    incubationWiggleEasing: 'spring',
     stickyEnabled: true,
     blobSizePx: 20,
     stickyDistancePx: 92,
@@ -259,8 +278,8 @@ export const defaultSettings: CanvasSettings = {
     stickyTension: 0.58,
     stickyWobble: 0.1,
     stickyResponse: 18,
-    expirySeconds: 180,
-    expiryShrinkMs: 1200,
+    expirySeconds: 45,
+    expiryShrinkMs: 2200,
   },
   group: {
     wallThickness: 12,
@@ -278,19 +297,19 @@ export const defaultSettings: CanvasSettings = {
   mergeSplit: {
     enabled: true,
     newSelect: true,
-    mergeDistancePx: 58,
-    proximityPx: 72,
-    activeZonePx: 18,
-    activeZoneTint: 0.34,
-    activeZoneGrain: 1.6,
+    mergeDistancePx: 36,
+    proximityPx: 32,
+    activeZonePx: 44,
+    activeZoneTint: 0.24,
+    activeZoneGrain: 1.2,
     mergeDwellMs: 720,
     vibrationAttackMs: 180,
     vibrationEasing: 'smooth',
-    cellJitterAmplitudePx: 1.4,
-    cellJitterFrequencyHz: 11,
-    wallJitterAmplitudePx: 2.2,
-    wallJitterFrequencyHz: 8,
-    stickySlowdown: 0.22,
+    cellJitterAmplitudePx: 1.2,
+    cellJitterFrequencyHz: 8,
+    wallJitterAmplitudePx: 2,
+    wallJitterFrequencyHz: 12,
+    stickySlowdown: 0.32,
     longPressMs: 720,
     splitJitterAttackMs: 220,
     splitJitterEasing: 'smooth',
@@ -518,7 +537,7 @@ export function groupColorFor(settings: CanvasSettings, order: number) {
 export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasSettings {
   if (
     !input ||
-    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, SETTINGS_SCHEMA_VERSION].includes(
+    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, SETTINGS_SCHEMA_VERSION].includes(
       input.schemaVersion ?? 0,
     )
   ) {
@@ -531,6 +550,10 @@ export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasS
     effects: {
       circle: { ...defaultSettings.effects.circle, ...input.effects?.circle },
       vignette: { ...defaultSettings.effects.vignette, ...input.effects?.vignette },
+      focusVignette: {
+        ...defaultSettings.effects.focusVignette,
+        ...(input.effects?.focusVignette ?? input.effects?.vignette),
+      },
       lens: { ...defaultSettings.effects.lens, ...input.effects?.lens },
       crt: { ...defaultSettings.effects.crt, ...input.effects?.crt },
     },

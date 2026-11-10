@@ -88,6 +88,10 @@ export function DateRail({
   const [focusedDayKey, setFocusedDayKey] = useState(activeDayKey)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
+  const daysRef = useRef<HTMLDivElement>(null)
+  const previousActiveDayRef = useRef(activeDayKey)
+  const wheelAccumulatorRef = useRef(0)
+  const wheelLockedRef = useRef(false)
   const dayButtonRefs = useRef(new Map<DayKey, HTMLButtonElement>())
   const calendarId = useId()
   const headingId = `${calendarId}-heading`
@@ -150,10 +154,52 @@ export function DateRail({
     }
   }, [calendarOpen])
 
+  useEffect(() => {
+    const previous = previousActiveDayRef.current
+    previousActiveDayRef.current = activeDayKey
+    if (
+      previous === activeDayKey ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return
+    }
+    const direction = compareDayKeys(activeDayKey, previous) > 0 ? 1 : -1
+    daysRef.current?.animate(
+      [
+        { transform: `translateX(${direction * 14}px)`, opacity: 0.76 },
+        { transform: 'translateX(0)', opacity: 1 },
+      ],
+      {
+        duration: 520,
+        easing: 'linear(0, .56 18%, .92 38%, 1.06 56%, .98 76%, 1)',
+      },
+    )
+  }, [activeDayKey])
+
   const selectDay = (dayKey: DayKey) => {
     if (!isSelectableDay(dayKey, todayDayKey)) return
     if (selectedDayKey === undefined) setInternalDayKey(dayKey)
     onSelectDay?.(dayKey)
+  }
+
+  const handleRailWheel = (event: React.WheelEvent<HTMLElement>) => {
+    if (disabled || calendarOpen) return
+    const dominantDelta =
+      Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+    if (Math.abs(dominantDelta) < 0.5) return
+    event.preventDefault()
+    if (wheelLockedRef.current) return
+    wheelAccumulatorRef.current += dominantDelta
+    if (Math.abs(wheelAccumulatorRef.current) < 18) return
+    const direction = wheelAccumulatorRef.current > 0 ? 1 : -1
+    wheelAccumulatorRef.current = 0
+    const candidate = addLocalDays(activeDayKey, direction)
+    if (!isSelectableDay(candidate, todayDayKey)) return
+    wheelLockedRef.current = true
+    selectDay(candidate)
+    window.setTimeout(() => {
+      wheelLockedRef.current = false
+    }, 420)
   }
 
   const openCalendar = () => {
@@ -211,6 +257,7 @@ export function DateRail({
     { month: 'long', year: 'numeric' },
     locale,
   )
+  const todayIsVisible = railDays.includes(todayDayKey)
 
   return (
     <section
@@ -219,6 +266,7 @@ export function DateRail({
       data-testid="date-rail"
       aria-disabled={disabled}
       aria-label="Journal date"
+      onWheel={handleRailWheel}
     >
       <div className="date-rail__month-wrap">
         <button
@@ -344,7 +392,12 @@ export function DateRail({
           </div>
         ) : null}
       </div>
-      <div className="date-rail__days" role="list" aria-label="Nearby journal days">
+      <div
+        ref={daysRef}
+        className="date-rail__days"
+        role="list"
+        aria-label="Nearby journal days"
+      >
         {railDays.map((dayKey) => {
           const hasContent = contentDayKeys.has(dayKey)
           const status = getDateStatus(dayKey, todayDayKey, hasContent)
@@ -373,6 +426,17 @@ export function DateRail({
           )
         })}
       </div>
+      <button
+        type="button"
+        className={`date-rail__today ${todayIsVisible ? '' : 'is-visible'}`}
+        data-testid="date-rail-today"
+        aria-hidden={todayIsVisible}
+        tabIndex={todayIsVisible ? -1 : 0}
+        disabled={disabled || todayIsVisible}
+        onClick={() => selectDay(todayDayKey)}
+      >
+        Today
+      </button>
     </section>
   )
 }

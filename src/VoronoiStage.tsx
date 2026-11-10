@@ -25,6 +25,7 @@ import {
 } from './microscope-postprocess'
 import { deserializeDocument, serializeDocument } from './model'
 import type { CanvasSettings } from './settings'
+import { nearestCaretIndex } from './text-layout'
 import { WallTextureRenderer } from './wall-texture-renderer'
 
 declare global {
@@ -142,6 +143,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   }))
   const focusAnimationFrameRef = useRef<number | null>(null)
   const focusProgressRef = useRef(0)
+  const focusMatrixRef = useRef<DOMMatrix | null>(null)
   const [selection, setSelection] = useState<string | null>(null)
   const previousSeedAuditRequestRef = useRef(seedAuditRequest)
 
@@ -183,6 +185,17 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     }
   }
 
+  const setEditorCaretFromSourcePoint = (point: { x: number; y: number }) => {
+    const editor = editorRef.current
+    const layout = latestLayoutRef.current
+    const active = editingRef.current
+    if (!editor || !layout || !active) return
+    const selectionIndex = nearestCaretIndex(layout.textLayout, point)
+    editor.focus({ preventScroll: true })
+    editor.setSelectionRange(selectionIndex, selectionIndex)
+    engineRef.current?.updateEditingSelection(active.id, selectionIndex)
+  }
+
   useEffect(() => {
     const canvas = canvasRef.current
     const postProcessCanvas = postProcessCanvasRef.current
@@ -209,6 +222,14 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
           setEditing(nextEditing)
         },
         onEditorLayout: positionEditor,
+        onEditorPointer: setEditorCaretFromSourcePoint,
+        onInlineEditingFinished: () => {
+          editingRef.current = null
+          setEditing(null)
+          setFocusExiting(false)
+          setFocusLayout(null)
+          setFocusPhase('idle')
+        },
         onSelectionChanged: setSelection,
         onModeChanged,
         onCanvasChanged: (field, animated) => {
@@ -401,6 +422,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     if (layout) positionEditor(layout)
     editor.focus()
     editor.setSelectionRange(editor.value.length, editor.value.length)
+    engineRef.current?.updateEditingSelection(editing.id, editor.value.length)
   }, [editing])
 
   useEffect(() => {
@@ -433,6 +455,10 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     const commitFromOutside = (event: PointerEvent) => {
       const editor = editorRef.current
       if (editor?.contains(event.target as Node)) return
+      const active = editingRef.current
+      if (active?.presentation === 'inline' && event.target === canvasRef.current) {
+        return
+      }
       finishEditingWithTransition('commit')
     }
     document.addEventListener('pointerdown', commitFromOutside)
@@ -475,6 +501,30 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
 
   const stopEditorPointer = (event: ReactPointerEvent<HTMLTextAreaElement>) => {
     event.stopPropagation()
+  }
+
+  const moveEditorCaretToPointer = (
+    event: ReactPointerEvent<HTMLElement>,
+  ) => {
+    const editor = editorRef.current
+    const layout = latestLayoutRef.current
+    const active = editingRef.current
+    if (!editor || !layout || !active) return
+    event.preventDefault()
+    event.stopPropagation()
+    let sourcePoint = new DOMPoint(event.clientX, event.clientY)
+    try {
+      if (focusMatrixRef.current) {
+        sourcePoint = sourcePoint.matrixTransform(focusMatrixRef.current.inverse())
+      }
+    } catch {
+      // A transient zero-scale matrix can occur for one frame during resize.
+    }
+    const mapped = postProcessorRef.current?.mapPointer({
+      x: sourcePoint.x,
+      y: sourcePoint.y,
+    }) ?? { x: sourcePoint.x, y: sourcePoint.y }
+    setEditorCaretFromSourcePoint(mapped)
   }
 
   const focusedPresentation = editing?.presentation === 'focused' || focusExiting
@@ -540,6 +590,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
           orbitOrigin,
           blurPx: focusSettings.blurPx * phase,
           opacity: 1 - smoothStep(phase),
+          vignetteMix: bounded,
         }
       } else {
         const phase = (bounded - 0.5) * 2
@@ -551,6 +602,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
           orbitOrigin,
           blurPx: focusSettings.blurPx * (1 - phase),
           opacity: smoothStep(phase),
+          vignetteMix: bounded,
         }
       }
     } else {
@@ -565,6 +617,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
         orbitOrigin,
         blurPx: Math.sin(Math.PI * bounded) * focusSettings.blurPx,
         opacity: 1,
+        vignetteMix: bounded,
       }
     }
     postProcessorRef.current?.setFocusScene(scene)
@@ -577,6 +630,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
         .translate(-scene.orbitOrigin.x, -scene.orbitOrigin.y)
         .translate(scene.translate.x, scene.translate.y)
         .scale(scene.scale)
+      focusMatrixRef.current = matrix
       sourceScene.style.transform = matrix.toString()
       sourceScene.style.filter = `blur(${scene.blurPx}px)`
       sourceScene.style.opacity = String(scene.opacity)
@@ -744,23 +798,25 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       </div>
       {editing && (
         <>
-          <button
-            className="focus-edit-dismiss"
-            type="button"
-            aria-label="Close focused text editing"
-            data-testid="focus-edit-dismiss"
-            onPointerDown={commitEditing}
-          />
-          <div
-            className="focus-edit-safe-zone"
-            aria-hidden="true"
-            style={{ clipPath: focusSafeClip }}
-            onPointerDown={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              editorRef.current?.focus()
-            }}
-          />
+          {editing.presentation === 'focused' ? (
+            <button
+              className="focus-edit-dismiss"
+              type="button"
+              aria-label="Close focused text editing"
+              data-testid="focus-edit-dismiss"
+              onPointerDown={commitEditing}
+            />
+          ) : null}
+          {editing.presentation === 'focused' ? (
+            <div
+              className="focus-edit-safe-zone"
+              aria-hidden="true"
+              style={{
+                clipPath: focusSafeClip ?? 'polygon(0 0, 0 0, 0 0)',
+              }}
+              onPointerDown={moveEditorCaretToPointer}
+            />
+          ) : null}
           <textarea
             key={editing.id}
             ref={editorRef}
@@ -780,9 +836,22 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
               const value = event.currentTarget.value
               if (editingRef.current) editingRef.current.value = value
               engineRef.current?.updateEditingDraft(editing.id, value)
+              engineRef.current?.updateEditingSelection(
+                editing.id,
+                event.currentTarget.selectionStart,
+              )
             }}
+            onSelect={(event) =>
+              engineRef.current?.updateEditingSelection(
+                editing.id,
+                event.currentTarget.selectionStart,
+              )
+            }
             onKeyDown={handleEditorKeyDown}
-            onPointerDown={stopEditorPointer}
+            onPointerDown={(event) => {
+              stopEditorPointer(event)
+              moveEditorCaretToPointer(event)
+            }}
           />
         </>
       )}

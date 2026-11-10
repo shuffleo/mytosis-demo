@@ -228,6 +228,17 @@ test('expires an untouched seed, while promotion cancels the countdown', async (
 })
 
 test('switches to the shared-model list editor and restores the microscope', async ({ page }) => {
+  await page.getByTestId('settings-toggle').click()
+  await page.getByText('View transition', { exact: true }).click()
+  const transitionDuration = page
+    .getByTestId('settings-panel')
+    .getByText('duration ms', { exact: true })
+    .locator('..')
+    .locator('input')
+  await transitionDuration.fill('1800')
+  await transitionDuration.press('Enter')
+  await page.getByTestId('settings-toggle').click()
+
   const postBefore = await page.evaluate(() => window.__VORONOI_DEBUG__?.postProcess())
   expect(postBefore?.active).toBe(true)
   const renderTargetBefore = await page.getByTestId('microscope-canvas').evaluate(
@@ -241,23 +252,34 @@ test('switches to the shared-model list editor and restores the microscope', asy
   const beforeCount = (await debugSnapshot(page))?.cellCount ?? 0
   await page.getByTestId('list-view-toggle').click()
   await expect(page.locator('.app-shell')).toHaveClass(/view-transition-microscope-out/)
-  await expect(page.locator('.view-transition-curtain')).toBeVisible()
-  const outgoingTrack = await page.getByTestId('microscope-view-track').evaluate((element) => ({
-    animationName: getComputedStyle(element).animationName,
-    animationDuration: getComputedStyle(element).animationDuration,
-    runningAnimations: element.getAnimations().length,
-  }))
-  const outgoingScene = await page.locator('.microscope-scene').evaluate((element) => ({
-    animationName: getComputedStyle(element).animationName,
-    runningAnimations: element.getAnimations().length,
-  }))
-  const fixedStageAnimation = await page.locator('.voronoi-stage').evaluate(
-    (element) => getComputedStyle(element).animationName,
-  )
-  const curtainAnimation = await page.locator('.view-transition-curtain').evaluate((element) => ({
-    animationName: getComputedStyle(element).animationName,
-    runningAnimations: element.getAnimations().length,
-  }))
+  const transitionSnapshot = await page.locator('.app-shell').evaluate((shell) => {
+    const track = shell.querySelector<HTMLElement>('[data-testid="microscope-view-track"]')!
+    const scene = shell.querySelector<HTMLElement>('.microscope-scene')!
+    const stage = shell.querySelector<HTMLElement>('.voronoi-stage')!
+    const curtain = shell.querySelector<HTMLElement>('.view-transition-curtain')!
+    return {
+      track: {
+        animationName: getComputedStyle(track).animationName,
+        animationDuration: getComputedStyle(track).animationDuration,
+        runningAnimations: track.getAnimations().length,
+      },
+      scene: {
+        animationName: getComputedStyle(scene).animationName,
+        runningAnimations: scene.getAnimations().length,
+      },
+      fixedStageAnimation: getComputedStyle(stage).animationName,
+      curtain: {
+        animationName: getComputedStyle(curtain).animationName,
+        display: getComputedStyle(curtain).display,
+        runningAnimations: curtain.getAnimations().length,
+      },
+    }
+  })
+  const outgoingTrack = transitionSnapshot.track
+  const outgoingScene = transitionSnapshot.scene
+  const fixedStageAnimation = transitionSnapshot.fixedStageAnimation
+  const curtainAnimation = transitionSnapshot.curtain
+  expect(curtainAnimation.display).not.toBe('none')
   expect(fixedStageAnimation).toBe('none')
   expect(outgoingTrack.animationName).toBe('view-microscope-orbit-out')
   expect(outgoingTrack.animationDuration).not.toBe('0s')

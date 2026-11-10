@@ -195,6 +195,25 @@ describe('versioned day journal store', () => {
     expect(store.loadPage('2026-11-10')?.cells[0].text).toBe('Content')
   })
 
+  it('overlays one shared palette across existing and future day pages', () => {
+    const storage = new MemoryStorage()
+    const store = createJournalStore({ storage })
+    const monday = documentWithFirstText('Monday')
+    const tuesday = documentWithFirstText('Tuesday')
+    monday.settings.palette.cellLight = '#ffffff'
+    tuesday.settings.palette.cellLight = '#000000'
+    store.savePage('2026-11-09', monday)
+    store.savePage('2026-11-10', tuesday)
+
+    const sharedPalette = structuredClone(monday.settings.palette)
+    sharedPalette.cellLight = '#123456'
+    store.setSharedPalette(sharedPalette)
+
+    expect(store.getSharedPalette()?.cellLight).toBe('#123456')
+    expect(store.loadPage('2026-11-09')?.settings.palette.cellLight).toBe('#123456')
+    expect(store.loadPage('2026-11-10')?.settings.palette.cellLight).toBe('#123456')
+  })
+
   it('clears only journal-owned pages, recovery data, and migration backups', () => {
     const storage = new MemoryStorage()
     const store = createJournalStore({ storage })

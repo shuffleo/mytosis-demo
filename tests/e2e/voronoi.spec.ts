@@ -119,6 +119,16 @@ interface Snapshot {
         distortion: number
         grain: number
       }
+      focusVignette: {
+        enabled: boolean
+        intensity: number
+        dim: number
+        blurRadius: number
+        rimWidth: number
+        softness: number
+        distortion: number
+        grain: number
+      }
       lens: {
         enabled: boolean
         shape: 'sphere'
@@ -172,6 +182,9 @@ interface Snapshot {
       incubationDelayMs: number
       incubationGrowthMs: number
       incubationBlur: number
+      incubationWigglePx: number
+      incubationWiggleHz: number
+      incubationWiggleEasing: 'smooth' | 'spring' | 'linear'
       stickyEnabled: boolean
       blobSizePx: number
       stickyDistancePx: number
@@ -179,6 +192,8 @@ interface Snapshot {
       stickyTension: number
       stickyWobble: number
       stickyResponse: number
+      expirySeconds: number
+      expiryShrinkMs: number
     }
     group: {
       wallThickness: number
@@ -373,7 +388,7 @@ test.beforeEach(async ({ page }) => {
 
 test('uses exact microscope defaults and composites Paper text below sharp UI', async ({ page }) => {
   const state = await snapshot(page)
-  expect(state.settings.schemaVersion).toBe(12)
+  expect(state.settings.schemaVersion).toBe(13)
   expect(state.settings.effects).toEqual({
     circle: {
       grain: 0.04,
@@ -387,6 +402,16 @@ test('uses exact microscope defaults and composites Paper text below sharp UI', 
       softness: 0.06,
       distortion: 0.002,
       grain: 0.024,
+    },
+    focusVignette: {
+      enabled: true,
+      intensity: 0.78,
+      dim: 0.56,
+      blurRadius: 0.25,
+      rimWidth: 0.24,
+      softness: 0.08,
+      distortion: 0.001,
+      grain: 0.018,
     },
     lens: {
       enabled: true,
@@ -433,6 +458,13 @@ test('uses exact microscope defaults and composites Paper text below sharp UI', 
 test('toggles vignette, lens, and CRT independently with live parameters', async ({ page }) => {
   await page.getByTestId('settings-toggle').click()
   const panel = page.getByTestId('settings-panel')
+  const vignetteProfile = panel.getByLabel('profile')
+  await expect(vignetteProfile).toHaveValue('Regular view')
+  await vignetteProfile.selectOption({ label: 'Focused edit' })
+  await setNumericBinding(page, 'rim dim', 0.41)
+  expect((await snapshot(page)).settings.effects.focusVignette.dim).toBeCloseTo(0.41)
+  expect((await snapshot(page)).settings.effects.vignette.dim).toBeCloseTo(0.8)
+  await vignetteProfile.selectOption({ label: 'Regular view' })
   await panel.getByText('CRT shader', { exact: true }).click()
   const enabled = panel.getByLabel('enabled', { exact: true })
   await expect(enabled).toHaveCount(4)
@@ -814,7 +846,9 @@ test('maps refracted pointer input back to Paper hit-testing', async ({ page }) 
   const targetVisible = await visiblePointForSource(page, targetSource)
   await page.mouse.move(visible.x, visible.y)
   await page.mouse.down()
-  await page.mouse.move(targetVisible.x, targetVisible.y, { steps: 16 })
+  // Keep this pointer-mapping assertion below the intentional merge dwell;
+  // the merge behavior itself is covered by its dedicated interaction test.
+  await page.mouse.move(targetVisible.x, targetVisible.y, { steps: 2 })
   await page.mouse.up()
   const moved = await snapshot(page)
   const movedCell = moved.model.cells.find((cell) => cell.id === 'cell-4')
@@ -1018,6 +1052,12 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
     stickyTension: 0.58,
     stickyWobble: 0.1,
     stickyResponse: 18,
+    incubationBlur: 16,
+    incubationWigglePx: 0.8,
+    incubationWiggleHz: 1.6,
+    incubationWiggleEasing: 'spring',
+    expirySeconds: 45,
+    expiryShrinkMs: 2200,
   })
   expect(fresh.settings.group).toMatchObject({
     wallThickness: 12,
@@ -1034,19 +1074,19 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
   expect(fresh.settings.mergeSplit).toEqual({
     enabled: true,
     newSelect: true,
-    mergeDistancePx: 58,
-    proximityPx: 72,
-    activeZonePx: 18,
-    activeZoneTint: 0.34,
-    activeZoneGrain: 1.6,
+    mergeDistancePx: 36,
+    proximityPx: 32,
+    activeZonePx: 44,
+    activeZoneTint: 0.24,
+    activeZoneGrain: 1.2,
     mergeDwellMs: 720,
     vibrationAttackMs: 180,
     vibrationEasing: 'smooth',
-    cellJitterAmplitudePx: 1.4,
-    cellJitterFrequencyHz: 11,
-    wallJitterAmplitudePx: 2.2,
-    wallJitterFrequencyHz: 8,
-    stickySlowdown: 0.22,
+    cellJitterAmplitudePx: 1.2,
+    cellJitterFrequencyHz: 8,
+    wallJitterAmplitudePx: 2,
+    wallJitterFrequencyHz: 12,
+    stickySlowdown: 0.32,
     longPressMs: 720,
     splitJitterAttackMs: 220,
     splitJitterEasing: 'smooth',
@@ -1235,7 +1275,7 @@ test('uses Pretext in-browser and keeps reflow stable after geometry settles', a
   expect((await snapshot(page)).textLayouts['cell-6'].engine).toBe('pretext')
 })
 
-test('edits with native caret, outside-dismisses, cancels, and deletes safely', async ({ page }) => {
+test('edits with a shader-aligned caret, outside-dismisses, cancels, and deletes safely', async ({ page }) => {
   await page.getByTestId('tool-select').click()
   const point = await sitePoint(page, 'cell-4')
   await page.mouse.dblclick(point.x, point.y, { delay: 70 })
@@ -1353,12 +1393,13 @@ test('undoes and redoes add, move, resize, edit, delete, and group mutations', a
   expect((await snapshot(page)).model.groups[0].memberIds).toEqual(['cell-1', 'cell-2'])
 })
 
-test('adds a 20px sticky audit seed without connector lines, then pops and promotes it', async ({
+test('adds a transient tessellated audit seed, makes room, then pops and promotes it', async ({
   page,
 }) => {
   await page.getByTestId('settings-toggle').click()
   await page.getByText('Auto-growth seeds', { exact: true }).click()
   await setNumericBinding(page, 'growth ms', 3000)
+  const beforeSeed = await snapshot(page)
   await page.getByText('Add seed', { exact: true }).click()
   await page.waitForTimeout(700)
   const growing = await snapshot(page)
@@ -1383,8 +1424,19 @@ test('adds a 20px sticky audit seed without connector lines, then pops and promo
   const seedHeight =
     Math.max(...seedPolygon.map((point) => point.y)) -
     Math.min(...seedPolygon.map((point) => point.y))
-  expect(seedWidth).toBeCloseTo(20, 0)
-  expect(seedHeight).toBeCloseTo(20, 0)
+  expect(seedWidth).toBeGreaterThan(3)
+  expect(seedHeight).toBeGreaterThan(3)
+  expect(seedWidth).toBeLessThan(48)
+  expect(seedHeight).toBeLessThan(48)
+  expect(
+    seed?.creation.sourceCellIds?.some(
+      (sourceId) =>
+        Math.abs(
+          polygonArea(growing.cells[sourceId]) -
+            polygonArea(beforeSeed.cells[sourceId]),
+        ) > 4,
+    ),
+  ).toBe(true)
   expect(growing.stickyBridges).toBeGreaterThan(0)
 
   await page.getByTestId('settings-toggle').click()
@@ -1430,6 +1482,38 @@ test('manually dies the oldest unexpanded seed from the paired audit controls', 
       async () =>
         (await snapshot(page)).model.cells.some((cell) => cell.id === seedId),
       { timeout: 2500 },
+    )
+    .toBe(false)
+})
+
+test('expires an inactive persisted seed without requiring the audit button', async ({
+  page,
+}) => {
+  expect(await page.evaluate(() => window.__VORONOI_DEBUG__?.forceSeed())).toBe(true)
+  const seedId = (await snapshot(page)).model.cells.find(
+    (cell) => cell.kind === 'seed',
+  )?.id
+  if (!seedId) throw new Error('Expected an automatic seed fixture')
+  await page.evaluate((id) => {
+    const serialized = window.__VORONOI_DEBUG__!.serialize()
+    const document = JSON.parse(serialized) as {
+      cells: Array<{
+        id: string
+        expiry: { state: string; createdAtMs?: number; timeoutMs: number }
+      }>
+    }
+    const seed = document.cells.find((cell) => cell.id === id)
+    if (!seed) throw new Error('Seed disappeared before expiry setup')
+    seed.expiry.state = 'scheduled'
+    seed.expiry.createdAtMs = Date.now() - 60_000
+    window.__VORONOI_DEBUG__!.load(JSON.stringify(document))
+  }, seedId)
+
+  await expect
+    .poll(
+      async () =>
+        (await snapshot(page)).model.cells.some((cell) => cell.id === seedId),
+      { timeout: 5000 },
     )
     .toBe(false)
 })
@@ -1480,6 +1564,8 @@ test('New Select delays sticky merge, long-press splits, and keeps both reversib
   await expect.poll(async () => (await snapshot(page)).mergeCandidateId).toBe('cell-2')
   await expect.poll(async () => (await snapshot(page)).stickyBridges).toBeGreaterThan(0)
   const stickyState = await snapshot(page)
+  expect(stickyState.stickyBridges).toBeGreaterThanOrEqual(2)
+  expect(stickyState.stickyBridges).toBeLessThanOrEqual(4)
   expect(polygonArea(stickyState.cells['cell-2'])).toBeGreaterThan(targetAreaBefore * 0.25)
   expect(stickyState.interactionEffects['cell-1']?.cellJitterPx).toBeGreaterThan(0)
   expect(stickyState.interactionEffects['cell-1']?.cellJitterPx).toBeLessThan(
@@ -1843,7 +1929,7 @@ test('incubates a resting empty cell with blurred synthesis and reveals it on se
   expect(incubating?.incubation.state).toBe('incubating')
   expect(incubating?.incubation.sourceIds.length).toBeGreaterThan(0)
   expect(incubating?.text.length).toBeGreaterThan(0)
-  expect(state.textEffects[previewId ?? ''].blur).toBe(8)
+  expect(state.textEffects[previewId ?? ''].blur).toBe(16)
   expect(state.textEffects[previewId ?? ''].scale).toBeLessThan(1)
   expect(state.incubationProgress[previewId ?? '']).toBeLessThan(1)
 

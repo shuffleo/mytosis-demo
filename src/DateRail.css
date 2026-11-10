@@ -6,6 +6,7 @@
   --date-rail-hover: rgba(238, 244, 240, 0.1);
   --date-rail-selected: #d8e1dc;
   --date-rail-selected-fg: #151916;
+  --date-rail-selected-hover: #cbd7d0;
   position: relative;
   display: flex;
   gap: 10px;
@@ -25,6 +26,7 @@
   --date-rail-hover: rgba(40, 45, 42, 0.08);
   --date-rail-selected: #303631;
   --date-rail-selected-fg: #f6f8f5;
+  --date-rail-selected-hover: #3b433e;
 }
 
 .date-rail button {
@@ -167,8 +169,7 @@
 .date-rail__day button[aria-pressed='true']:hover:not(:disabled),
 .date-rail__day button[aria-pressed='true']:focus-visible {
   color: var(--date-rail-selected-fg);
-  background: var(--date-rail-selected);
-  box-shadow: inset 0 0 0 1px currentColor;
+  background: var(--date-rail-selected-hover);
 }
 
 .date-rail__day button[aria-pressed='true'] .date-rail__weekday {
@@ -308,8 +309,41 @@
 .date-calendar__cell.is-selected button:hover:not(:disabled),
 .date-calendar__cell.is-selected button:focus-visible {
   color: var(--date-rail-selected-fg);
-  background: var(--date-rail-selected);
-  box-shadow: inset 0 0 0 1px currentColor;
+  background: var(--date-rail-selected-hover);
+}
+
+.date-rail__today {
+  position: absolute;
+  top: 10px;
+  right: 0;
+  z-index: 1;
+  min-width: 58px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--date-rail-border) !important;
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(8px) scale(0.96);
+  transition:
+    opacity 220ms ease-in-out,
+    transform 360ms cubic-bezier(.2,.9,.25,1.08),
+    background-color 160ms ease;
+}
+
+.date-rail__today.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  cursor: pointer;
+  transform: translateX(0) scale(1);
+}
+
+.date-rail__today.is-visible:hover {
+  background: var(--date-rail-hover);
+}
+
+.date-rail:has(.date-rail__today.is-visible) .date-rail__days {
+  max-width: calc(100% - 150px);
 }
 
 .date-calendar__content-dot {
@@ -342,5 +376,6 @@
   .date-rail *::before,
   .date-rail *::after {
     scroll-behavior: auto;
+    transition: none !important;
   }
 }

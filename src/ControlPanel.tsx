@@ -16,6 +16,7 @@ const CONTROL_HINTS: Record<string, string> = {
   'Microscope effects — unavailable': 'WebGL2 is unavailable, so the Paper.js fallback stays active.',
   'Whole circle texture': 'Static texture applied uniformly across the circular field.',
   'Microscope vignette': 'Optical blur, dimming, distortion, and grain concentrated at the rim.',
+  profile: 'Chooses independent regular-view or focused-editing vignette settings.',
   'Lens shader': 'Centered spherical refraction locked to the field radius.',
   'CRT shader': 'Optional display-era color, curvature, phosphor, and scanline effects.',
   Geometry: 'Cell-wall spacing, rounding, texture, and safe text inset.',
@@ -91,6 +92,9 @@ const CONTROL_HINTS: Record<string, string> = {
   'incubate delay': 'Rest time before an untouched empty cell synthesizes text.',
   'text emerge': 'Duration of the blurred incubation text reveal.',
   'text blur': 'Blur applied while incubated text remains unrevealed.',
+  'text wiggle px': 'Sets the maximum gentle movement of unread incubating suggestions.',
+  'text wiggle hz': 'Sets how often unread incubating suggestions softly wiggle.',
+  'text wiggle easing': 'Chooses the motion character of incubating suggestion wiggles.',
   'sticky blobs': 'Shows organic bridges for seeds, merge targets, and armed group attachment.',
   'blob size px': 'Sets the initial visible seed diameter.',
   'sticky reach': 'Maximum gap over which a sticky bridge remains connected.',
@@ -223,49 +227,72 @@ export function ControlPanel({
     })
 
     const vignette = microscope.addFolder({ title: 'Microscope vignette', expanded: true })
-    vignette.addBinding(params.effects.vignette, 'enabled', { label: 'enabled' })
-    vignette.addBinding(params.effects.vignette, 'intensity', {
+    const vignetteChoice: { profile: 'regular' | 'focused' } = { profile: 'regular' }
+    const vignetteParams = structuredClone(params.effects.vignette)
+    const syncVignetteProfile = () => {
+      const target =
+        vignetteChoice.profile === 'focused'
+          ? params.effects.focusVignette
+          : params.effects.vignette
+      Object.assign(target, vignetteParams)
+      emitSettings()
+    }
+    vignette
+      .addBinding(vignetteChoice, 'profile', {
+        label: 'profile',
+        options: { 'Regular view': 'regular', 'Focused edit': 'focused' },
+      })
+      .on('change', ({ value }) => {
+        const source =
+          value === 'focused' ? params.effects.focusVignette : params.effects.vignette
+        Object.assign(vignetteParams, structuredClone(source))
+        pane.refresh()
+      })
+    vignette
+      .addBinding(vignetteParams, 'enabled', { label: 'enabled' })
+      .on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'intensity', {
       label: 'intensity',
       min: 0,
       max: 1,
       step: 0.01,
-    })
-    vignette.addBinding(params.effects.vignette, 'dim', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'dim', {
       label: 'rim dim',
       min: 0,
       max: 0.8,
       step: 0.01,
-    })
-    vignette.addBinding(params.effects.vignette, 'blurRadius', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'blurRadius', {
       label: 'blur px',
       min: 0,
       max: 12,
       step: 0.25,
-    })
-    vignette.addBinding(params.effects.vignette, 'rimWidth', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'rimWidth', {
       label: 'rim width',
       min: 0.04,
       max: 0.35,
       step: 0.01,
-    })
-    vignette.addBinding(params.effects.vignette, 'softness', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'softness', {
       label: 'softness',
       min: 0.01,
       max: 0.24,
       step: 0.01,
-    })
-    vignette.addBinding(params.effects.vignette, 'distortion', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'distortion', {
       label: 'distortion',
       min: 0,
       max: 0.03,
       step: 0.001,
-    })
-    vignette.addBinding(params.effects.vignette, 'grain', {
+    }).on('change', syncVignetteProfile)
+    vignette.addBinding(vignetteParams, 'grain', {
       label: 'grain / noise',
       min: 0,
       max: 0.08,
       step: 0.001,
-    })
+    }).on('change', syncVignetteProfile)
 
     const lens = microscope.addFolder({ title: 'Lens shader', expanded: true })
     lens.addBinding(params.effects.lens, 'enabled', { label: 'enabled' })
@@ -541,8 +568,24 @@ export function ControlPanel({
     seed.addBinding(params.seed, 'incubationBlur', {
       label: 'text blur',
       min: 0,
-      max: 16,
+      max: 28,
       step: 0.5,
+    })
+    seed.addBinding(params.seed, 'incubationWigglePx', {
+      label: 'text wiggle px',
+      min: 0,
+      max: 3,
+      step: 0.1,
+    })
+    seed.addBinding(params.seed, 'incubationWiggleHz', {
+      label: 'text wiggle hz',
+      min: 0.2,
+      max: 5,
+      step: 0.1,
+    })
+    seed.addBinding(params.seed, 'incubationWiggleEasing', {
+      label: 'text wiggle easing',
+      options: { Smooth: 'smooth', Spring: 'spring', Linear: 'linear' },
     })
     seed.addBinding(params.seed, 'stickyEnabled', {
       label: 'sticky blobs',
@@ -930,6 +973,9 @@ export function ControlPanel({
     pane.addButton({ title: 'Reset defaults' }).on('click', () => {
       const defaults = cloneSettings()
       Object.assign(params.effects.vignette, defaults.effects.vignette)
+      Object.assign(params.effects.focusVignette, defaults.effects.focusVignette)
+      Object.assign(vignetteParams, defaults.effects.vignette)
+      vignetteChoice.profile = 'regular'
       Object.assign(params.effects.lens, defaults.effects.lens)
       Object.assign(params.effects.crt, defaults.effects.crt)
       Object.assign(params.effects.circle, defaults.effects.circle)

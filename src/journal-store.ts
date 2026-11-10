@@ -4,6 +4,7 @@ import {
   type VoronoiDocument,
 } from './model'
 import { isDayKey, toLocalDayKey, type DayKey } from './local-day'
+import type { CanvasSettings } from './settings'
 
 export const JOURNAL_STORE_VERSION = 1
 export const JOURNAL_STORAGE_KEY = 'mytosis.daily-journal'
@@ -48,6 +49,8 @@ export interface JournalStore {
   hasContent(dayKey: DayKey): boolean
   listDayKeys(): DayKey[]
   contentDayKeys(): Set<DayKey>
+  getSharedPalette(): CanvasSettings['palette'] | null
+  setSharedPalette(palette: CanvasSettings['palette']): void
   clearAll(): void
 }
 
@@ -75,6 +78,10 @@ function legacyBackupKey(storageKey: string) {
 
 function pageRecoveryKey(storageKey: string, dayKey: DayKey) {
   return `${storageKey}:recovery:${dayKey}`
+}
+
+function preferencesStorageKey(storageKey: string) {
+  return `${storageKey}:preferences`
 }
 
 function emptyManifest(): JournalManifestV1 {
@@ -208,6 +215,23 @@ export function createJournalStore(options: JournalStoreOptions = {}): JournalSt
     )
   }
 
+  const getSharedPalette = (): CanvasSettings['palette'] | null => {
+    const serialized = storage.getItem(preferencesStorageKey(storageKey))
+    if (!serialized) return null
+    try {
+      const value = JSON.parse(serialized) as {
+        version?: number
+        palette?: Partial<CanvasSettings['palette']>
+      }
+      if (!value.palette || typeof value.palette !== 'object') return null
+      const colors = Object.values(value.palette)
+      if (colors.some((color) => typeof color !== 'string')) return null
+      return structuredClone(value.palette) as CanvasSettings['palette']
+    } catch {
+      return null
+    }
+  }
+
   const loadPage = (dayKey: DayKey) => {
     readManifest()
     const serialized = storage.getItem(pageStorageKey(storageKey, dayKey))
@@ -247,6 +271,13 @@ export function createJournalStore(options: JournalStoreOptions = {}): JournalSt
             document: canonicalDocument,
           } satisfies StoredJournalPageV1),
         )
+      }
+      const sharedPalette = getSharedPalette()
+      if (sharedPalette) {
+        document.settings.palette = {
+          ...document.settings.palette,
+          ...sharedPalette,
+        }
       }
       return document
     } catch {
@@ -295,6 +326,16 @@ export function createJournalStore(options: JournalStoreOptions = {}): JournalSt
         readManifest().days.filter((dayKey) => {
           const document = loadPage(dayKey)
           return document ? documentHasJournalContent(document) : false
+        }),
+      )
+    },
+    getSharedPalette,
+    setSharedPalette(palette) {
+      storage.setItem(
+        preferencesStorageKey(storageKey),
+        JSON.stringify({
+          version: JOURNAL_STORE_VERSION,
+          palette: structuredClone(palette),
         }),
       )
     },

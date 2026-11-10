@@ -6,6 +6,7 @@ import {
   migrateSettings,
   palettePresetById,
   PALETTE_PRESETS,
+  SETTINGS_SCHEMA_VERSION,
 } from './settings'
 
 function contrastRatio(foreground: string, background: string) {
@@ -75,8 +76,12 @@ describe('refined control defaults', () => {
       stickyTension: 0.58,
       stickyWobble: 0.1,
       stickyResponse: 18,
-      expirySeconds: 180,
-      expiryShrinkMs: 1200,
+      expirySeconds: 45,
+      expiryShrinkMs: 2200,
+      incubationBlur: 16,
+      incubationWigglePx: 0.8,
+      incubationWiggleHz: 1.6,
+      incubationWiggleEasing: 'spring',
     })
     expect(defaultSettings.group).toMatchObject({
       wallThickness: 12,
@@ -93,19 +98,19 @@ describe('refined control defaults', () => {
     expect(defaultSettings.mergeSplit).toEqual({
       enabled: true,
       newSelect: true,
-      mergeDistancePx: 58,
-      proximityPx: 72,
-      activeZonePx: 18,
-      activeZoneTint: 0.34,
-      activeZoneGrain: 1.6,
+      mergeDistancePx: 36,
+      proximityPx: 32,
+      activeZonePx: 44,
+      activeZoneTint: 0.24,
+      activeZoneGrain: 1.2,
       mergeDwellMs: 720,
       vibrationAttackMs: 180,
       vibrationEasing: 'smooth',
-      cellJitterAmplitudePx: 1.4,
-      cellJitterFrequencyHz: 11,
-      wallJitterAmplitudePx: 2.2,
-      wallJitterFrequencyHz: 8,
-      stickySlowdown: 0.22,
+      cellJitterAmplitudePx: 1.2,
+      cellJitterFrequencyHz: 8,
+      wallJitterAmplitudePx: 2,
+      wallJitterFrequencyHz: 12,
+      stickySlowdown: 0.32,
       longPressMs: 720,
       splitJitterAttackMs: 220,
       splitJitterEasing: 'smooth',
@@ -150,6 +155,16 @@ describe('refined control defaults', () => {
         distortion: 0.002,
         grain: 0.024,
       },
+      focusVignette: {
+        enabled: true,
+        intensity: 0.78,
+        dim: 0.56,
+        blurRadius: 0.25,
+        rimWidth: 0.24,
+        softness: 0.08,
+        distortion: 0.001,
+        grain: 0.018,
+      },
       lens: {
         enabled: true,
         shape: 'sphere',
@@ -186,8 +201,8 @@ describe('refined control defaults', () => {
     })
     expect(migrated.geometry.seamGap).toBe(18)
     expect(migrated.effects).toEqual(defaultSettings.effects)
-    expect(migrated.schemaVersion).toBe(12)
-    expect(migrated.seed.expirySeconds).toBe(180)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.seed.expirySeconds).toBe(45)
     expect(migrated.clustering.autoK).toBe(true)
   })
 
@@ -200,7 +215,7 @@ describe('refined control defaults', () => {
     legacy.effects.vignette.grain = 0
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(12)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.effects.vignette.grain).toBe(0)
     expect(migrated.effects.lens.glow).toBe(0.2)
     expect(migrated.effects.lens.glowRadius).toBe(2.5)
@@ -213,7 +228,7 @@ describe('refined control defaults', () => {
     delete (legacy.geometry as Partial<typeof legacy.geometry>).wallGrain
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(12)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.effects.circle.grain).toBe(0.04)
     expect(migrated.geometry.wallGrain).toBe(0.65)
   })
@@ -238,7 +253,7 @@ describe('refined control defaults', () => {
     delete (legacy.palette as Partial<typeof legacy.palette>).group8
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(12)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.geometry.wallGrainEnabled).toBe(true)
     expect(migrated.particles).toEqual(defaultSettings.particles)
     expect(migrated.editFocus).toEqual(defaultSettings.editFocus)
@@ -254,7 +269,7 @@ describe('refined control defaults', () => {
     delete (legacy.editFocus as Partial<typeof legacy.editFocus>).arcDepth
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(12)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.editFocus.trackTransitionEnabled).toBe(true)
     expect(migrated.editFocus.arcDepth).toBe(1.8)
   })
@@ -271,7 +286,7 @@ describe('refined control defaults', () => {
     ).splitJitterAmplitudePx
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(12)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.group.wallGrainFrequency).toBe(0.1)
     expect(migrated.group.wallGrainOctaves).toBe(2)
     expect(migrated.group.wallGrainOpacity).toBe(0.74)
@@ -295,7 +310,7 @@ describe('refined control defaults', () => {
     delete (legacy.motion as Partial<typeof legacy.motion>).ambientCoverage
 
     const migrated = migrateSettings(legacy)
-    expect(migrated.schemaVersion).toBe(12)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.motion).toMatchObject({
       ambientEnabled: true,
       ambientAmplitudePx: 0.58,
@@ -303,6 +318,20 @@ describe('refined control defaults', () => {
       ambientPhaseSpread: 0.42,
       ambientCoverage: 0.72,
     })
+  })
+
+  it('migrates the previous shared vignette into both view profiles', () => {
+    const legacy = structuredClone(defaultSettings)
+    legacy.schemaVersion = 12
+    legacy.effects.vignette.dim = 0.37
+    delete (
+      legacy.effects as Partial<typeof legacy.effects>
+    ).focusVignette
+
+    const migrated = migrateSettings(legacy)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.effects.vignette.dim).toBe(0.37)
+    expect(migrated.effects.focusVignette.dim).toBe(0.37)
   })
 
   it('keeps cell text WCAG AA readable in every microscope palette', () => {

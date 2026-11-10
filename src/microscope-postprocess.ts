@@ -1,6 +1,6 @@
 import { mapPostProcessedPoint, type PostProcessField } from './microscope-mapping'
 import type { Point2 } from './geometry'
-import type { CanvasSettings } from './settings'
+import type { CanvasSettings, VignetteSettings } from './settings'
 
 export type PostProcessStatus = 'live' | 'fallback'
 
@@ -27,6 +27,7 @@ export interface FocusSceneState {
   orbitOrigin: Point2
   blurPx: number
   opacity: number
+  vignetteMix: number
 }
 
 const VERTEX_SHADER = `#version 300 es
@@ -318,6 +319,7 @@ export class MicroscopePostProcessor {
     orbitOrigin: { x: 0, y: 0 },
     blurPx: 0,
     opacity: 1,
+    vignetteMix: 0,
   }
 
   constructor(
@@ -397,7 +399,13 @@ export class MicroscopePostProcessor {
 
   mapPointer(point: Point2) {
     if (this.suspended || this.status !== 'live' || !this.anyEffectEnabled()) return { ...point }
-    return mapPostProcessedPoint(point, this.field, this.settings)
+    return mapPostProcessedPoint(point, this.field, {
+      ...this.settings,
+      effects: {
+        ...this.settings.effects,
+        vignette: this.effectiveVignette(),
+      },
+    })
   }
 
   requestFrame(force = false) {
@@ -467,11 +475,30 @@ export class MicroscopePostProcessor {
     return (
       effects.circle.grain > 0 ||
       effects.vignette.enabled ||
+      effects.focusVignette.enabled ||
       effects.lens.enabled ||
       effects.crt.enabled ||
       geometry.wallGrainEnabled ||
       particles.enabled
     )
+  }
+
+  private effectiveVignette(): VignetteSettings {
+    const { vignette: regular, focusVignette: focused } = this.settings.effects
+    const ratio = Math.max(0, Math.min(1, this.focusScene.vignetteMix))
+    const mix = (first: number, second: number) =>
+      first + (second - first) * ratio
+    const strength = mix(regular.enabled ? 1 : 0, focused.enabled ? 1 : 0)
+    return {
+      enabled: strength > 0.001,
+      intensity: mix(regular.intensity, focused.intensity) * strength,
+      dim: mix(regular.dim, focused.dim),
+      blurRadius: mix(regular.blurRadius, focused.blurRadius),
+      rimWidth: mix(regular.rimWidth, focused.rimWidth),
+      softness: mix(regular.softness, focused.softness),
+      distortion: mix(regular.distortion, focused.distortion),
+      grain: mix(regular.grain, focused.grain),
+    }
   }
 
   private initialize(gl: WebGL2RenderingContext) {
@@ -613,7 +640,8 @@ export class MicroscopePostProcessor {
     )
     uniform1f('uFieldRadius', this.field.radius * Math.min(scaleX, scaleY))
 
-    const { circle, vignette, lens, crt } = this.settings.effects
+    const { circle, lens, crt } = this.settings.effects
+    const vignette = this.effectiveVignette()
     const { geometry } = this.settings
     uniform1f('uCircleGrain', circle.grain)
     uniform1f('uWallGrainEnabled', geometry.wallGrainEnabled ? 1 : 0)

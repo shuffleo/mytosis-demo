@@ -153,6 +153,7 @@ function App() {
     const today = new Date()
     const dayKey = toLocalDayKey(today)
     const document = store.loadPage(dayKey) ?? createDefaultDocument()
+    if (!store.getSharedPalette()) store.setSharedPalette(document.settings.palette)
     if (!store.hasPage(dayKey)) store.savePage(dayKey, document)
     return { store, today, dayKey, document }
   })
@@ -196,6 +197,10 @@ function App() {
   const [viewTransition, setViewTransition] = useState<
     'microscope-out' | 'list-in' | 'list-out' | 'microscope-in' | null
   >(null)
+  const [dateTransition, setDateTransition] = useState<{
+    phase: 'out' | 'in'
+    direction: 'forward' | 'backward'
+  } | null>(null)
   const transitionTimersRef = useRef<number[]>([])
   const [clustering, setClustering] = useState<{
     phase: 'processing' | 'settling'
@@ -203,7 +208,7 @@ function App() {
     message: string
   } | null>(null)
   const clusteringActive = clustering !== null
-  const transitionActive = viewTransition !== null
+  const transitionActive = viewTransition !== null || dateTransition !== null
   const handleHistoryChanged = useCallback((canUndo: boolean, canRedo: boolean) => {
     setHistoryState({ canUndo, canRedo })
   }, [])
@@ -230,6 +235,11 @@ function App() {
     [journalSession, refreshContentDays],
   )
   const updateSettings = (next: typeof settings) => {
+    if (
+      JSON.stringify(settingsRef.current.palette) !== JSON.stringify(next.palette)
+    ) {
+      journalSession.store.setSharedPalette(next.palette)
+    }
     setSettings(next)
     settingsRef.current = next
     setListDocument((current) =>
@@ -266,7 +276,8 @@ function App() {
     }
   }
   const selectDay = (nextDayKey: DayKey) => {
-    if (nextDayKey === selectedDayKeyRef.current) return
+    if (nextDayKey === selectedDayKeyRef.current || transitionActive) return
+    const previousDayKey = selectedDayKeyRef.current
     const currentDocument =
       viewRef.current === 'list'
         ? listDocumentRef.current
@@ -277,22 +288,43 @@ function App() {
     if (currentDocument) {
       persistDocument(selectedDayKeyRef.current, currentDocument)
     }
-    const nextDocument =
-      journalSession.store.loadPage(nextDayKey) ?? createEmptyDocument()
-    if (!journalSession.store.hasPage(nextDayKey)) {
-      nextDocument.settings = cloneSettings(settingsRef.current)
-      nextDocument.layout.settingsVersion = nextDocument.settings.schemaVersion
+    const applyNextDay = () => {
+      const nextDocument =
+        journalSession.store.loadPage(nextDayKey) ?? createEmptyDocument()
+      if (!journalSession.store.hasPage(nextDayKey)) {
+        nextDocument.settings = cloneSettings(settingsRef.current)
+        nextDocument.layout.settingsVersion = nextDocument.settings.schemaVersion
+      }
+      nextDocument.settings.palette = structuredClone(
+        journalSession.store.getSharedPalette() ?? settingsRef.current.palette,
+      )
+      const serialized = serializeDocument(nextDocument)
+      lastSavedRef.current.set(nextDayKey, serialized)
+      selectedDayKeyRef.current = nextDayKey
+      setSelectedDayKey(nextDayKey)
+      setSettings(cloneSettings(nextDocument.settings))
+      settingsRef.current = nextDocument.settings
+      setListDocument(deserializeDocument(serialized))
+      setListDirty(false)
+      setHistoryState({ canUndo: false, canRedo: false })
+      stageRef.current?.loadDocument(serialized)
     }
-    const serialized = serializeDocument(nextDocument)
-    lastSavedRef.current.set(nextDayKey, serialized)
-    selectedDayKeyRef.current = nextDayKey
-    setSelectedDayKey(nextDayKey)
-    setSettings(cloneSettings(nextDocument.settings))
-    settingsRef.current = nextDocument.settings
-    setListDocument(deserializeDocument(serialized))
-    setListDirty(false)
-    setHistoryState({ canUndo: false, canRedo: false })
-    stageRef.current?.loadDocument(serialized)
+    if (
+      !settingsRef.current.viewTransition.enabled ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      applyNextDay()
+      return
+    }
+    const direction = nextDayKey > previousDayKey ? 'forward' : 'backward'
+    const duration = Math.max(240, settingsRef.current.viewTransition.durationMs)
+    setDateTransition({ phase: 'out', direction })
+    const midpointTimer = window.setTimeout(() => {
+      applyNextDay()
+      setDateTransition({ phase: 'in', direction })
+    }, duration / 2)
+    const endTimer = window.setTimeout(() => setDateTransition(null), duration)
+    transitionTimersRef.current = [midpointTimer, endTimer]
   }
   const startAnew = () => {
     if (
@@ -308,6 +340,7 @@ function App() {
     const nextDocument = createDefaultDocument()
     const serialized = serializeDocument(nextDocument)
     journalSession.store.savePage(nextDayKey, nextDocument)
+    journalSession.store.setSharedPalette(nextDocument.settings.palette)
     lastSavedRef.current.clear()
     lastSavedRef.current.set(nextDayKey, serialized)
     selectedDayKeyRef.current = nextDayKey
@@ -501,7 +534,11 @@ function App() {
 
   return (
     <div
-      className={`app-shell ${viewTransition ? `view-transition-${viewTransition}` : ''}`}
+      className={`app-shell ${viewTransition ? `view-transition-${viewTransition}` : ''} ${
+        dateTransition
+          ? `date-transition-${dateTransition.direction}-${dateTransition.phase}`
+          : ''
+      }`}
       style={{ background: settings.palette.exterior, ...transitionStyle }}
     >
       <VoronoiStage

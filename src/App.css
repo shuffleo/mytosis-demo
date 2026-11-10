@@ -29,6 +29,58 @@
   pointer-events: auto;
 }
 
+.date-transition-forward-out .microscope-view-track,
+.date-transition-forward-out .list-editor,
+.date-transition-backward-out .microscope-view-track,
+.date-transition-backward-out .list-editor,
+.date-transition-forward-in .microscope-view-track,
+.date-transition-forward-in .list-editor,
+.date-transition-backward-in .microscope-view-track,
+.date-transition-backward-in .list-editor {
+  transform-origin: var(--view-transition-origin);
+  pointer-events: none;
+}
+
+.date-transition-forward-out .microscope-view-track,
+.date-transition-forward-out .list-editor {
+  animation: journal-day-forward-out var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.date-transition-forward-in .microscope-view-track,
+.date-transition-forward-in .list-editor {
+  animation: journal-day-forward-in var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.date-transition-backward-out .microscope-view-track,
+.date-transition-backward-out .list-editor {
+  animation: journal-day-backward-out var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.date-transition-backward-in .microscope-view-track,
+.date-transition-backward-in .list-editor {
+  animation: journal-day-backward-in var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+@keyframes journal-day-forward-out {
+  0% { filter: blur(0); opacity: 1; transform: translateX(0) rotate(0) scale(1); }
+  100% { filter: blur(calc(var(--view-transition-blur) * 0.65)); opacity: 0; transform: translateX(-62vw) rotate(-8deg) scale(0.94); }
+}
+
+@keyframes journal-day-forward-in {
+  0% { filter: blur(calc(var(--view-transition-blur) * 0.65)); opacity: 0; transform: translateX(62vw) rotate(8deg) scale(0.94); }
+  100% { filter: blur(0); opacity: 1; transform: translateX(0) rotate(0) scale(1); }
+}
+
+@keyframes journal-day-backward-out {
+  0% { filter: blur(0); opacity: 1; transform: translateX(0) rotate(0) scale(1); }
+  100% { filter: blur(calc(var(--view-transition-blur) * 0.65)); opacity: 0; transform: translateX(62vw) rotate(8deg) scale(0.94); }
+}
+
+@keyframes journal-day-backward-in {
+  0% { filter: blur(calc(var(--view-transition-blur) * 0.65)); opacity: 0; transform: translateX(-62vw) rotate(-8deg) scale(0.94); }
+  100% { filter: blur(0); opacity: 1; transform: translateX(0) rotate(0) scale(1); }
+}
+
 .view-transition-list-out .list-editor {
   z-index: 21;
   transform-origin: var(--view-transition-origin);
@@ -263,9 +315,10 @@
   font-weight: 500;
   text-align: center;
   text-align-last: center;
+  pointer-events: none;
   resize: none;
   transform: translate(-50%, -50%);
-  caret-color: var(--editor-caret, #202522);
+  caret-color: transparent;
   -webkit-text-fill-color: transparent;
   contain: paint;
 }
@@ -297,7 +350,7 @@
 
 .cell-editor::selection {
   color: transparent;
-  background: color-mix(in srgb, var(--editor-selection, #c8d8d0) 78%, transparent);
+  background: transparent;
   -webkit-text-fill-color: transparent;
 }
 
@@ -549,7 +602,9 @@
 }
 
 .cell-editor::placeholder {
-  -webkit-text-fill-color: #8b938f;
+  color: transparent;
+  opacity: 0;
+  -webkit-text-fill-color: transparent;
 }
 
 [data-tooltip]::after {
@@ -802,6 +857,19 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .date-transition-forward-out .microscope-view-track,
+  .date-transition-forward-out .list-editor,
+  .date-transition-forward-in .microscope-view-track,
+  .date-transition-forward-in .list-editor,
+  .date-transition-backward-out .microscope-view-track,
+  .date-transition-backward-out .list-editor,
+  .date-transition-backward-in .microscope-view-track,
+  .date-transition-backward-in .list-editor {
+    filter: none;
+    transform: none;
+    animation-duration: 120ms;
+  }
+
   .view-transition-list-out .list-editor,
   .view-transition-list-in .list-editor,
   .view-transition-microscope-out .microscope-view-track,
