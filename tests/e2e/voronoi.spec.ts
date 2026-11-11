@@ -73,6 +73,7 @@ interface Snapshot {
   cells: Record<string, Point2[]>
   handles: Point2[]
   groupWalls: Record<string, Point2[]>
+  groupWallEffects: Record<string, { strokeWidth: number }>
   breathScales: Record<string, { cell: number; text: number }>
   seedProgress: Record<string, number>
   incubationProgress: Record<string, number>
@@ -89,9 +90,17 @@ interface Snapshot {
   textLayouts: Record<string, { engine: 'pretext' | 'fallback'; lineCount: number }>
   stickyBridges: number
   mergeCandidateId: string | null
+  groupCue: {
+    kind: 'join' | 'detach'
+    cellId: string
+    groupId: string
+    strength: number
+    ghostStrength: number
+  } | null
   history: { undoDepth: number; redoDepth: number }
   gesture: {
     kind: string
+    pendingDetach?: boolean
     attachCandidateGroupId?: string | null
     attachArmedGroupId?: string | null
   } | null
@@ -205,6 +214,15 @@ interface Snapshot {
       attachContactThreshold: number
       attachDistancePx: number
       attachHoldMs: number
+      cueFrequencyHz: number
+      cueCellAmplitudePx: number
+      cueWallAmplitudePx: number
+      cueStrokeExcitation: number
+      cuePhaseOffset: number
+      ghostSizePx: number
+      ghostRepulsion: number
+      ghostResponse: number
+      cueEasing: 'smooth' | 'spring' | 'linear'
       motionEasing: 'smooth' | 'spring' | 'direct'
     }
     mergeSplit: {
@@ -421,7 +439,7 @@ test.beforeEach(async ({ page }) => {
 
 test('uses exact microscope defaults and composites Paper text below sharp UI', async ({ page }) => {
   const state = await snapshot(page)
-  expect(state.settings.schemaVersion).toBe(14)
+  expect(state.settings.schemaVersion).toBe(15)
   expect(state.settings.effects).toEqual({
     circle: {
       grain: 0.04,
@@ -706,6 +724,26 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   const editor = page.getByTestId('cell-editor')
   await expect(editor).toBeFocused()
   await expect(page.getByTestId('focus-edit-dismiss')).toBeVisible()
+  const overlay = page.getByTestId('microscope-text-overlay')
+  await expect(overlay).toHaveAttribute('data-overlay-state', 'focused')
+  const enteringLayerContract = await page.evaluate(() => {
+    const source = document.querySelector<HTMLElement>('[data-testid="voronoi-canvas"]')!
+    const shader = document.querySelector<HTMLElement>('[data-testid="microscope-canvas"]')!
+    const editor = document.querySelector<HTMLElement>('[data-testid="cell-editor"]')!
+    const overlay = document.querySelector<HTMLElement>(
+      '[data-testid="microscope-text-overlay"]',
+    )!
+    return {
+      source: Number.parseInt(getComputedStyle(source).zIndex, 10),
+      shader: Number.parseInt(getComputedStyle(shader).zIndex, 10),
+      editor: Number.parseInt(getComputedStyle(editor).zIndex, 10),
+      overlay: Number.parseInt(getComputedStyle(overlay).zIndex, 10),
+      overlayPointerEvents: getComputedStyle(overlay).pointerEvents,
+    }
+  })
+  expect(enteringLayerContract.source).toBeLessThan(enteringLayerContract.shader)
+  expect(enteringLayerContract.editor).toBeLessThan(enteringLayerContract.overlay)
+  expect(enteringLayerContract.overlayPointerEvents).toBe('none')
   const fixedOpticsBefore = await page.getByTestId('microscope-canvas').evaluate((element) => {
     const bounds = element.getBoundingClientRect()
     return {
@@ -744,6 +782,14 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
       textFill: style.getPropertyValue('-webkit-text-fill-color'),
       pointerEvents: style.pointerEvents,
       spellcheck: (element as HTMLTextAreaElement).spellcheck,
+      computedFontSize: Number.parseFloat(style.fontSize),
+      transformScale: Math.hypot(
+        new DOMMatrixReadOnly(style.transform).a,
+        new DOMMatrixReadOnly(style.transform).b,
+      ),
+      visualFontSize: Number.parseFloat(
+        (element as HTMLElement).dataset.visualFontSize ?? '0',
+      ),
     }
   })
   expect(editorStyle.width).toBeGreaterThan(20)
@@ -753,6 +799,12 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   expect(editorStyle.textFill).not.toBe('rgba(0, 0, 0, 0)')
   expect(editorStyle.pointerEvents).toBe('auto')
   expect(editorStyle.spellcheck).toBe(true)
+  expect(editorStyle.visualFontSize).toBeGreaterThanOrEqual(11)
+  expect(editorStyle.visualFontSize).toBeLessThanOrEqual(16)
+  expect(editorStyle.computedFontSize * editorStyle.transformScale).toBeCloseTo(
+    editorStyle.visualFontSize,
+    1,
+  )
   const {
     canvas: focusedCanvas,
     postProcess: focusedPostProcess,
@@ -827,10 +879,13 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   await page.mouse.click(8, 8)
   await expect(editor).toHaveCount(0)
   await expect(page.locator('.voronoi-stage')).toHaveAttribute('data-focus-phase', 'exiting')
+  await expect(overlay).toHaveAttribute('data-overlay-state', 'exiting')
+  await expect(overlay).toHaveCSS('pointer-events', 'none')
   await expect
     .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
     .toBe('idle')
   await expect(page.locator('.microscope-scene')).not.toHaveClass(/is-focus-/)
+  await expect(overlay).toHaveCount(0)
   const restored = await postProcessSnapshot(page)
   expect(restored.focusScene.scale).toBeCloseTo(1, 5)
   expect(restored.focusScene.orbitAngle).toBeCloseTo(0, 5)
@@ -862,6 +917,44 @@ test('retains the direct focused-editor zoom when the tracked transition is off'
   await expect
     .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
     .toBe('idle')
+})
+
+test('keeps newly created placeholder text under the microscope overlay from its first frame', async ({
+  page,
+}) => {
+  const before = await snapshot(page)
+  await page.getByTestId('tool-add').click()
+  await page.mouse.click(
+    before.field.center.x - before.field.radius * 0.14,
+    before.field.center.y + before.field.radius * 0.08,
+  )
+  const editor = page.getByTestId('cell-editor')
+  const overlay = page.getByTestId('microscope-text-overlay')
+  await expect(editor).toHaveAttribute('data-presentation', 'inline')
+  await expect(editor).not.toHaveAttribute('placeholder', '')
+  await expect(overlay).toHaveAttribute('data-overlay-state', 'inline')
+  const layerContract = await page.evaluate(() => {
+    const z = (testId: string) =>
+      Number.parseInt(
+        getComputedStyle(
+          document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!,
+        ).zIndex,
+        10,
+      )
+    return {
+      source: z('voronoi-canvas'),
+      shader: z('microscope-canvas'),
+      editor: z('cell-editor'),
+      overlay: z('microscope-text-overlay'),
+    }
+  })
+  expect(layerContract.source).toBeLessThan(layerContract.shader)
+  expect(layerContract.editor).toBeLessThan(layerContract.overlay)
+
+  await editor.fill('A newly created thought.')
+  await editor.press('Enter')
+  await expect(overlay).toHaveCount(0)
+  await expect(page.getByTestId('microscope-canvas')).toBeVisible()
 })
 
 test('keeps CRT color shift and bulge while phosphor and scanlines are independently off', async ({
@@ -1195,11 +1288,20 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
   expect(fresh.settings.group).toMatchObject({
     wallThickness: 12,
     wallGap: 2,
-    attraction: 0.32,
-    detachThreshold: 0.8,
+    attraction: 0.4,
+    detachThreshold: 0.4,
     motionEasing: 'smooth',
     attachDistancePx: 42,
     attachHoldMs: 720,
+    cueFrequencyHz: 7,
+    cueCellAmplitudePx: 1.6,
+    cueWallAmplitudePx: 2.4,
+    cueStrokeExcitation: 4,
+    cuePhaseOffset: 0.18,
+    ghostSizePx: 42,
+    ghostRepulsion: 0.34,
+    ghostResponse: 12,
+    cueEasing: 'smooth',
     wallGrainFrequency: 0.1,
     wallGrainOctaves: 2,
     wallGrainOpacity: 0.74,
@@ -1672,6 +1774,9 @@ test('New Select delays sticky merge, long-press splits, and keeps both reversib
   await page.mouse.move(target.x, target.y, { steps: 2 })
   expect((await snapshot(page)).mergeCandidateId).toBeNull()
   await page.waitForTimeout(220)
+  await expect
+    .poll(async () => (await snapshot(page)).interactionEffects['cell-2']?.tint ?? 0)
+    .toBeGreaterThan(0)
   const activeZoneState = await snapshot(page)
   expect(activeZoneState.interactionEffects['cell-2']?.tint).toBeGreaterThan(0)
   expect(activeZoneState.interactionEffects['cell-2']?.grainBoost).toBeGreaterThan(1)
@@ -1940,6 +2045,14 @@ test('wall-selects and resizes a group, then individually edits, reorders, and d
   await page.mouse.move(detachStart.x, detachStart.y)
   await page.mouse.down()
   await page.mouse.move(detachTarget.x, detachTarget.y, { steps: 18 })
+  await expect.poll(async () => (await snapshot(page)).groupCue?.kind).toBe('detach')
+  await expect
+    .poll(async () => (await snapshot(page)).groupCue?.ghostStrength ?? 0)
+    .toBeGreaterThan(0)
+  await page.waitForTimeout(820)
+  await expect.poll(async () => (await snapshot(page)).gesture?.pendingDetach).toBe(true)
+  expect(await page.evaluate(() => window.__VORONOI_DEBUG__!.serialize()))
+    .not.toContain('group-ghost:')
   await page.mouse.up()
   await page.waitForTimeout(250)
   state = await snapshot(page)
@@ -1950,6 +2063,29 @@ test('wall-selects and resizes a group, then individually edits, reorders, and d
 test('pulls distant members inward, dwell-attaches at the wall, and preserves deep attach', async ({
   page,
 }) => {
+  test.setTimeout(60_000)
+  await page.getByTestId('settings-toggle').click()
+  const panel = page.getByTestId('settings-panel')
+  await panel.getByText('Groups', { exact: true }).click()
+  await panel.getByText('Join / detach cues', { exact: true }).click()
+  for (const label of [
+    'join threshold px',
+    'detach threshold',
+    'dwell ms',
+    'cue frequency hz',
+    'cell amplitude px',
+    'wall amplitude px',
+    'stroke excitation px',
+    'phase offset',
+    'ghost size px',
+    'ghost repulsion',
+    'ghost response',
+    'cue easing',
+  ]) {
+    await expect(panel.getByText(label, { exact: true })).toBeVisible()
+  }
+  await setNumericBinding(page, 'dwell ms', 1800)
+  await page.getByTestId('settings-toggle').click()
   const initial = await snapshot(page)
   const firstInitial = initial.model.cells.find((cell) => cell.id === 'cell-1')
   const secondInitial = initial.model.cells.find((cell) => cell.id === 'cell-11')
@@ -1980,6 +2116,7 @@ test('pulls distant members inward, dwell-attaches at the wall, and preserves de
   await page.mouse.up()
   await page.waitForTimeout(200)
   expect((await snapshot(page)).model.cells.find((cell) => cell.id === 'cell-6')?.groupId).toBeUndefined()
+  await expect.poll(async () => (await snapshot(page)).groupCue).toBeNull()
 
   attachPoint = await cellVisualPoint(page, 'cell-6')
   const dwellWall = await visiblePointForSource(page, wallPoint(await snapshot(page), group.id))
@@ -1989,10 +2126,40 @@ test('pulls distant members inward, dwell-attaches at the wall, and preserves de
   await expect
     .poll(async () => (await snapshot(page)).gesture?.attachCandidateGroupId)
     .toBe(group.id)
-  await page.waitForTimeout(850)
+  await expect.poll(async () => (await snapshot(page)).groupCue?.kind).toBe('join')
+  await expect
+    .poll(async () => (await snapshot(page)).groupCue?.ghostStrength ?? 0)
+    .toBeGreaterThan(0)
+  expect(await page.evaluate(() => window.__VORONOI_DEBUG__!.serialize()))
+    .not.toContain('group-ghost:')
+  await page.mouse.up()
+  await expect.poll(async () => (await snapshot(page)).groupCue).toBeNull()
+  expect((await snapshot(page)).model.cells.find((cell) => cell.id === 'cell-6')?.groupId)
+    .toBeUndefined()
+  await page.getByTestId('settings-toggle').click()
+  await panel.getByText('Groups', { exact: true }).click()
+  await panel.getByText('Join / detach cues', { exact: true }).click()
+  await setNumericBinding(page, 'dwell ms', 300)
+  await page.getByTestId('settings-toggle').click()
+
+  attachPoint = await cellVisualPoint(page, 'cell-6')
+  const armedWall = await visiblePointForSource(page, wallPoint(await snapshot(page), group.id))
+  await page.mouse.move(attachPoint.x, attachPoint.y)
+  await page.mouse.down()
+  await page.mouse.move(armedWall.x, armedWall.y, { steps: 14 })
+  await expect
+    .poll(async () => (await snapshot(page)).gesture?.attachCandidateGroupId)
+    .toBe(group.id)
+  await page.waitForTimeout(420)
   await expect
     .poll(async () => (await snapshot(page)).gesture?.attachArmedGroupId)
     .toBe(group.id)
+  const armedCue = await snapshot(page)
+  expect(armedCue.groupCue?.kind).toBe('join')
+  expect(armedCue.groupCue?.strength).toBeGreaterThan(0.7)
+  expect(armedCue.groupWallEffects[group.id].strokeWidth).toBeGreaterThan(
+    armedCue.settings.group.wallThickness,
+  )
   await expect.poll(async () => (await snapshot(page)).stickyBridges).toBeGreaterThan(0)
   await page.mouse.up()
   await expect
@@ -2045,6 +2212,22 @@ test('incubates a resting empty cell with blurred synthesis and reveals it on se
   expect(state.textEffects[previewId ?? ''].blur).toBe(16)
   expect(state.textEffects[previewId ?? ''].scale).toBeLessThan(1)
   expect(state.incubationProgress[previewId ?? '']).toBeLessThan(1)
+  const incubationLayers = await page.evaluate(() => {
+    const z = (testId: string) =>
+      Number.parseInt(
+        getComputedStyle(
+          document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!,
+        ).zIndex,
+        10,
+      )
+    return {
+      source: z('voronoi-canvas'),
+      wallNoise: z('wall-texture-canvas'),
+      shader: z('microscope-canvas'),
+    }
+  })
+  expect(incubationLayers.source).toBeLessThan(incubationLayers.shader)
+  expect(incubationLayers.wallNoise).toBeLessThan(incubationLayers.shader)
 
   await page.getByTestId('tool-select').click()
   const revealPoint = await cellVisualPoint(page, previewId ?? '')

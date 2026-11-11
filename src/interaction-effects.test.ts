@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  groupCuePhase,
+  groupCueStrength,
   mergeVibrationState,
   proximityExcitement,
   splitJitterState,
@@ -70,5 +72,24 @@ describe('transient interaction effects', () => {
         reducedMotion: true,
       }),
     ).toBe(0)
+  })
+
+  it('combines spatial contact and dwell while keeping one deterministic phase', () => {
+    const near = groupCueStrength({
+      spatialProgress: 0.5,
+      dwellElapsedMs: 0,
+      dwellMs: 720,
+      easing: 'linear',
+    })
+    const held = groupCueStrength({
+      spatialProgress: 0.5,
+      dwellElapsedMs: 720,
+      dwellMs: 720,
+      easing: 'linear',
+    })
+    expect(near).toBeCloseTo(0.14)
+    expect(held).toBeCloseTo(0.5)
+    expect(groupCuePhase(0.25, 2, 0)).toBeCloseTo(Math.PI)
+    expect(groupCuePhase(0.25, 2, 0.25)).toBeCloseTo(Math.PI * 1.5)
   })
 })

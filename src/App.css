@@ -30,35 +30,50 @@
 }
 
 .date-transition-forward-out .microscope-view-track,
-.date-transition-forward-out .list-editor,
 .date-transition-backward-out .microscope-view-track,
-.date-transition-backward-out .list-editor,
 .date-transition-forward-in .microscope-view-track,
-.date-transition-forward-in .list-editor,
-.date-transition-backward-in .microscope-view-track,
-.date-transition-backward-in .list-editor {
+.date-transition-backward-in .microscope-view-track {
   transform-origin: var(--view-transition-origin);
   pointer-events: none;
 }
 
-.date-transition-forward-out .microscope-view-track,
-.date-transition-forward-out .list-editor {
+.date-transition-forward-out .list-editor,
+.date-transition-backward-out .list-editor,
+.date-transition-forward-in .list-editor,
+.date-transition-backward-in .list-editor {
+  pointer-events: none;
+}
+
+.date-transition-forward-out .microscope-view-track {
   animation: journal-day-forward-out var(--view-phase-duration) var(--view-transition-ease) both;
 }
 
-.date-transition-forward-in .microscope-view-track,
-.date-transition-forward-in .list-editor {
+.date-transition-forward-in .microscope-view-track {
   animation: journal-day-forward-in var(--view-phase-duration) var(--view-transition-ease) both;
 }
 
-.date-transition-backward-out .microscope-view-track,
-.date-transition-backward-out .list-editor {
+.date-transition-backward-out .microscope-view-track {
   animation: journal-day-backward-out var(--view-phase-duration) var(--view-transition-ease) both;
 }
 
-.date-transition-backward-in .microscope-view-track,
-.date-transition-backward-in .list-editor {
+.date-transition-backward-in .microscope-view-track {
   animation: journal-day-backward-in var(--view-phase-duration) var(--view-transition-ease) both;
+}
+
+.date-transition-forward-out .list-editor {
+  animation: journal-list-day-forward-out var(--view-phase-duration) linear both;
+}
+
+.date-transition-forward-in .list-editor {
+  animation: journal-list-day-forward-in var(--view-phase-duration) linear both;
+}
+
+.date-transition-backward-out .list-editor {
+  animation: journal-list-day-backward-out var(--view-phase-duration) linear both;
+}
+
+.date-transition-backward-in .list-editor {
+  animation: journal-list-day-backward-in var(--view-phase-duration) linear both;
 }
 
 @keyframes journal-day-forward-out {
@@ -79,6 +94,26 @@
 @keyframes journal-day-backward-in {
   0% { filter: blur(calc(var(--view-transition-blur) * 0.65)); opacity: 0; transform: translateX(-62vw) rotate(-8deg) scale(0.94); }
   100% { filter: blur(0); opacity: 1; transform: translateX(0) rotate(0) scale(1); }
+}
+
+@keyframes journal-list-day-forward-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100vw); }
+}
+
+@keyframes journal-list-day-forward-in {
+  from { transform: translateX(100vw); }
+  to { transform: translateX(0); }
+}
+
+@keyframes journal-list-day-backward-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(100vw); }
+}
+
+@keyframes journal-list-day-backward-in {
+  from { transform: translateX(-100vw); }
+  to { transform: translateX(0); }
 }
 
 .view-transition-list-out .list-editor {
@@ -346,6 +381,57 @@
   opacity: 0;
 }
 
+.microscope-text-overlay {
+  position: fixed;
+  z-index: 45;
+  inset: 0;
+  overflow: hidden;
+  clip-path: circle(
+    var(--field-radius) at var(--field-center-x) var(--field-center-y)
+  );
+  pointer-events: none;
+}
+
+.microscope-text-overlay::before,
+.microscope-text-overlay::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+}
+
+.microscope-text-overlay::before {
+  background:
+    repeating-linear-gradient(
+      117deg,
+      rgba(255, 255, 255, var(--focus-overlay-grain)) 0 1px,
+      rgba(0, 0, 0, var(--focus-overlay-grain)) 1px 2px,
+      transparent 2px 4px
+    );
+  mix-blend-mode: soft-light;
+  opacity: 0.22;
+}
+
+.microscope-text-overlay::after {
+  background: radial-gradient(
+    circle var(--field-radius) at var(--field-center-x) var(--field-center-y),
+    transparent 0 68%,
+    rgba(0, 0, 0, calc(var(--focus-overlay-dim) * 0.42)) 84%,
+    rgba(0, 0, 0, var(--focus-overlay-dim)) 100%
+  );
+  backdrop-filter: blur(var(--focus-overlay-blur));
+  -webkit-mask-image: radial-gradient(
+    circle var(--field-radius) at var(--field-center-x) var(--field-center-y),
+    transparent 0 66%,
+    #000 92%
+  );
+  mask-image: radial-gradient(
+    circle var(--field-radius) at var(--field-center-x) var(--field-center-y),
+    transparent 0 66%,
+    #000 92%
+  );
+}
+
 .focus-edit-dismiss {
   position: fixed;
   z-index: 42;
@@ -457,18 +543,10 @@
   gap: 1px;
 }
 
-.toolbar-divider {
-  width: 1px;
-  height: 30px;
-  margin: 0 2px;
-  background: rgba(51, 60, 55, 0.14);
-}
-
 .sprout-toggle {
   width: 42px;
   height: 42px;
   margin-left: 2px;
-  border-left: 1px solid rgba(51, 60, 55, 0.14);
   border-radius: 10px;
 }
 
@@ -524,7 +602,6 @@
   --toolbar-fg: rgba(255, 255, 255, 0.92);
   --toolbar-fg-disabled: rgba(255, 255, 255, 0.38);
   --toolbar-accent: #9fd4b8;
-  --toolbar-separator: rgba(255, 255, 255, 0.12);
   --toolbar-hover-plate: rgba(255, 255, 255, 0.08);
   position: fixed;
   z-index: 60;
@@ -545,7 +622,6 @@
   --toolbar-fg: #2a2a28;
   --toolbar-fg-disabled: rgba(42, 42, 40, 0.35);
   --toolbar-accent: #3d8f7a;
-  --toolbar-separator: #e0e0dc;
   --toolbar-hover-plate: rgba(0, 0, 0, 0.05);
 }
 
@@ -556,7 +632,7 @@
   padding: 4px;
   overflow: hidden;
   border: 1px solid var(--toolbar-border);
-  border-radius: 12px;
+  border-radius: 0;
   background: var(--toolbar-bg);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.22);
 }
@@ -580,7 +656,7 @@
   padding: 0;
   color: inherit;
   border: 0;
-  border-radius: 9px;
+  border-radius: 0;
   background: transparent;
   font: inherit;
   cursor: pointer;
@@ -600,16 +676,6 @@
   min-width: 84px;
   padding-inline: 11px;
   white-space: nowrap;
-}
-
-.toolbar-capsule--tools > .toolbar-labeled-button + .toolbar-labeled-button::before {
-  position: absolute;
-  top: 7px;
-  bottom: 7px;
-  left: 0;
-  width: 1px;
-  background: var(--toolbar-separator);
-  content: "";
 }
 
 .toolbar-icon {
@@ -637,7 +703,7 @@
 
 .toolbar-icon-button:hover:not(:disabled) {
   background: var(--toolbar-hover-plate);
-  border-radius: 50%;
+  border-radius: 0;
 }
 
 .toolbar-labeled-button:hover:not(:disabled) {
@@ -660,7 +726,7 @@
   bottom: 0;
   left: 10px;
   height: 3px;
-  border-radius: 3px 3px 0 0;
+  border-radius: 0;
   background: var(--toolbar-accent);
   content: "";
 }
@@ -987,10 +1053,6 @@
 
   .history-toolbar {
     gap: 0;
-  }
-
-  .toolbar-divider {
-    margin: 0;
   }
 
   .list-editor-column {

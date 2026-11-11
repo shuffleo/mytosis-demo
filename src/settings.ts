@@ -106,6 +106,15 @@ export interface CanvasSettings {
     attachContactThreshold: number
     attachDistancePx: number
     attachHoldMs: number
+    cueFrequencyHz: number
+    cueCellAmplitudePx: number
+    cueWallAmplitudePx: number
+    cueStrokeExcitation: number
+    cuePhaseOffset: number
+    ghostSizePx: number
+    ghostRepulsion: number
+    ghostResponse: number
+    cueEasing: 'smooth' | 'spring' | 'linear'
     motionEasing: 'smooth' | 'spring' | 'direct'
   }
   mergeSplit: {
@@ -179,7 +188,7 @@ export interface CanvasSettings {
   }
 }
 
-export const SETTINGS_SCHEMA_VERSION = 14
+export const SETTINGS_SCHEMA_VERSION = 15
 
 const VERSION_13_FOCUS_VIGNETTE: VignetteSettings = {
   enabled: true,
@@ -302,11 +311,20 @@ export const defaultSettings: CanvasSettings = {
     wallGrainFrequency: 0.1,
     wallGrainOctaves: 2,
     wallGrainOpacity: 0.74,
-    attraction: 0.32,
-    detachThreshold: 0.8,
+    attraction: 0.4,
+    detachThreshold: 0.4,
     attachContactThreshold: 2,
     attachDistancePx: 42,
     attachHoldMs: 720,
+    cueFrequencyHz: 7,
+    cueCellAmplitudePx: 1.6,
+    cueWallAmplitudePx: 2.4,
+    cueStrokeExcitation: 4,
+    cuePhaseOffset: 0.18,
+    ghostSizePx: 42,
+    ghostRepulsion: 0.34,
+    ghostResponse: 12,
+    cueEasing: 'smooth',
     motionEasing: 'smooth',
   },
   mergeSplit: {
@@ -553,7 +571,7 @@ export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasS
   const sourceVersion = input?.schemaVersion ?? 0
   if (
     !input ||
-    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, SETTINGS_SCHEMA_VERSION].includes(
+    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, SETTINGS_SCHEMA_VERSION].includes(
       sourceVersion,
     )
   ) {

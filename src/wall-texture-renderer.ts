@@ -160,7 +160,7 @@ export class WallTextureRenderer {
       }
     }
     for (const group of snapshot.groups) {
-      parts.push(group.id, group.color)
+      parts.push(group.id, group.color, group.strokeBoost.toFixed(2))
       for (let index = 0; index < group.points.length; index += 8) {
         parts.push(
           group.points[index].x.toFixed(1),
@@ -213,7 +213,7 @@ export class WallTextureRenderer {
           context,
           group.points,
           group.color,
-          Math.max(1, this.settings.group.wallThickness),
+          Math.max(1, this.settings.group.wallThickness + group.strokeBoost),
           {
             frequency: this.settings.group.wallGrainFrequency,
             octaves: this.settings.group.wallGrainOctaves,
