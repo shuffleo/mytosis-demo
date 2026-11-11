@@ -64,6 +64,8 @@ interface Snapshot {
   previewId: string | null
   hoveredId: string | null
   selectedId: string | null
+  selectedIds: string[]
+  selectionMode: 'single' | 'multi'
   selectedGroupId: string | null
   editingId: string | null
   acquiringGroupId: string | null
@@ -1891,6 +1893,52 @@ test('excludes grouped journals from auto-growth synthesis candidates', async ({
   for (const sourceId of seed?.creation.sourceCellIds ?? []) {
     expect(state.model.cells.find((cell) => cell.id === sourceId)?.groupId).toBeUndefined()
   }
+})
+
+test('feature-flagged touch gestures select, edit, and enter multi-select', async ({
+  page,
+}) => {
+  await page.goto('/?view=microscope&pointerGestures=1')
+  await expect(page.getByTestId('voronoi-canvas')).toHaveAttribute(
+    'data-pointer-gestures',
+    'enabled',
+  )
+  const canvas = page.getByTestId('voronoi-canvas')
+  const dispatchTouch = (
+    type: 'pointerdown' | 'pointerup',
+    point: Point2,
+    pointerId = 21,
+  ) =>
+    canvas.dispatchEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      pointerId,
+      pointerType: 'touch',
+      isPrimary: true,
+      clientX: point.x,
+      clientY: point.y,
+      buttons: type === 'pointerdown' ? 1 : 0,
+    })
+
+  const first = await sitePoint(page, 'cell-1')
+  await dispatchTouch('pointerdown', first)
+  await dispatchTouch('pointerup', first)
+  await expect.poll(async () => (await snapshot(page)).selectedId).toBe('cell-1')
+  await dispatchTouch('pointerdown', first)
+  await dispatchTouch('pointerup', first)
+  await expect(page.getByTestId('cell-editor')).toBeFocused()
+  await page.getByTestId('cell-editor').press('Escape')
+
+  const second = await sitePoint(page, 'cell-2')
+  await dispatchTouch('pointerdown', first, 22)
+  await page.waitForTimeout(540)
+  await dispatchTouch('pointerup', first, 22)
+  await expect.poll(async () => (await snapshot(page)).selectionMode).toBe('multi')
+  await dispatchTouch('pointerdown', second, 23)
+  await dispatchTouch('pointerup', second, 23)
+  await expect
+    .poll(async () => (await snapshot(page)).selectedIds.sort())
+    .toEqual(['cell-1', 'cell-2'])
 })
 
 test('New Select delays sticky merge, long-press splits, and keeps both reversible', async ({ page }) => {

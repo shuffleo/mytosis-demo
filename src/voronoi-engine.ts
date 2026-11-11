@@ -296,6 +296,7 @@ export interface VoronoiDebugSnapshot {
   hoveredId: string | null
   selectedId: string | null
   selectedIds: string[]
+  selectionMode: 'single' | 'multi'
   selectedGroupId: string | null
   editingId: string | null
   editingCaretIndex: number
@@ -488,6 +489,7 @@ export class VoronoiCanvasEngine {
   private readonly history = new BoundedCommandHistory<string>((state) => state, 80)
   private blocked = false
   private suspended = false
+  private touchMultiSelect = false
   private clusteringWave = false
   private editingDraftText: string | null = null
   private editingSelectionIndex = 0
@@ -811,6 +813,89 @@ export class VoronoiCanvasEngine {
     }
   }
 
+  pointerTap(clientX: number, clientY: number) {
+    if (this.blocked || this.state.editingId) return
+    const raw = this.canvasPointFromClient(clientX, clientY)
+    const point = this.coordinateMapper(raw)
+    const paperPoint = new this.scope.Point(point.x, point.y)
+    const hit = this.hitSeed(paperPoint) ?? this.hitTest(paperPoint)
+    const cell = hit?.cellId ? this.findCell(hit.cellId) : undefined
+    if (this.touchMultiSelect) {
+      if (cell?.kind === 'journal') {
+        this.toggleCellSelection(cell.id)
+        this.updateCanvasState()
+      } else {
+        this.touchMultiSelect = false
+        this.clearSelection()
+      }
+      return
+    }
+    if (
+      this.state.mode === 'select' &&
+      cell?.kind === 'journal' &&
+      this.state.selectedCellId === cell.id &&
+      this.state.selectedCellIds.length === 1
+    ) {
+      this.startEditing(cell.id)
+      return
+    }
+    this.handleMouseDown(this.toolEventAt(raw))
+    this.state.gesture = null
+    this.updateCanvasState()
+  }
+
+  pointerHold(clientX: number, clientY: number) {
+    if (this.blocked || this.state.editingId || this.state.mode !== 'select') return
+    const raw = this.canvasPointFromClient(clientX, clientY)
+    const point = this.coordinateMapper(raw)
+    const hit = this.hitSeed(new this.scope.Point(point.x, point.y)) ?? this.hitTest(
+      new this.scope.Point(point.x, point.y),
+    )
+    const cell = hit?.cellId ? this.findCell(hit.cellId) : undefined
+    if (!cell || cell.kind !== 'journal') return
+    this.touchMultiSelect = true
+    if (!this.state.selectedCellIds.includes(cell.id)) {
+      this.toggleCellSelection(cell.id)
+    }
+    this.state.gesture = null
+    this.updateCanvasState()
+  }
+
+  pointerDragStart(clientX: number, clientY: number) {
+    if (this.blocked || this.state.editingId) return
+    this.handleMouseDown(this.toolEventAt(this.canvasPointFromClient(clientX, clientY)))
+  }
+
+  pointerDragMove(clientX: number, clientY: number) {
+    if (this.blocked || this.state.editingId) return
+    this.handleMouseDrag(this.toolEventAt(this.canvasPointFromClient(clientX, clientY)))
+  }
+
+  pointerDragEnd() {
+    this.handleMouseUp()
+  }
+
+  pointerCancel() {
+    const gesture = this.state.gesture
+    const selectedCellId = gesture && 'cellId' in gesture ? gesture.cellId : null
+    if (gesture && 'historyCaptured' in gesture && gesture.historyCaptured) {
+      const checkpoint = this.history.discardLastCheckpoint()
+      if (checkpoint) this.restoreHistory(checkpoint.state)
+      if (selectedCellId && this.findCell(selectedCellId)) this.selectCell(selectedCellId)
+      this.notifyHistoryChanged()
+    }
+    this.state.gesture = null
+    this.activeGroupCue = null
+    this.groupGhostSlot = null
+    this.canvas.style.cursor = this.state.mode === 'add' ? 'crosshair' : 'default'
+    this.updateCanvasState()
+  }
+
+  finishTouchMultiSelect() {
+    this.touchMultiSelect = false
+    this.updateCanvasState()
+  }
+
   setAutoGrowth(enabled: boolean) {
     this.autoGrowth = enabled
     this.nextSeedAt = enabled ? this.lastFrameTime + this.nextSeedDelay() / 1000 : Number.POSITIVE_INFINITY
@@ -1074,6 +1159,7 @@ export class VoronoiCanvasEngine {
       hoveredId: this.state.hoveredId,
       selectedId: this.state.selectedCellId,
       selectedIds: [...this.state.selectedCellIds],
+      selectionMode: this.touchMultiSelect ? 'multi' : 'single',
       selectedGroupId: this.state.selectedGroupId,
       editingId: this.state.editingId,
       editingCaretIndex: this.editingSelectionIndex,
@@ -1295,12 +1381,25 @@ export class VoronoiCanvasEngine {
     this.fieldRadius = Math.max(40, this.fieldOuterRadius - this.settings.geometry.outerGap)
   }
 
-  private eventPoint(event: MouseEvent) {
+  private canvasPointFromClient(clientX: number, clientY: number) {
     const bounds = this.canvas.getBoundingClientRect()
-    const mapped = this.coordinateMapper({
-      x: ((event.clientX - bounds.left) / bounds.width) * this.width,
-      y: ((event.clientY - bounds.top) / bounds.height) * this.height,
-    })
+    return {
+      x: ((clientX - bounds.left) / bounds.width) * this.width,
+      y: ((clientY - bounds.top) / bounds.height) * this.height,
+    }
+  }
+
+  private toolEventAt(point: Point2) {
+    return {
+      point: new this.scope.Point(point.x, point.y),
+      modifiers: { shift: false },
+    } as paper.ToolEvent
+  }
+
+  private eventPoint(event: MouseEvent) {
+    const mapped = this.coordinateMapper(
+      this.canvasPointFromClient(event.clientX, event.clientY),
+    )
     return new this.scope.Point(mapped.x, mapped.y)
   }
 
@@ -4683,6 +4782,7 @@ export class VoronoiCanvasEngine {
   }
 
   private clearSelection() {
+    this.touchMultiSelect = false
     this.state.selectedCellId = null
     this.state.selectedCellIds = []
     this.state.selectedGroupId = null

@@ -29,6 +29,11 @@ import type { CanvasSettings } from './settings'
 import { nearestCaretIndex } from './text-layout'
 import { WallTextureRenderer } from './wall-texture-renderer'
 import type { AdaptiveTextVariantMetadata } from './adaptive-text'
+import {
+  GestureController,
+  mobilePointerGesturesEnabled,
+  type PointerKind,
+} from './gesture-controller'
 
 declare global {
   interface Window {
@@ -352,6 +357,66 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     )
     postProcessorRef.current = postProcessor
     engine.setCoordinateMapper((point) => postProcessor.mapPointer(point))
+    const pointerGestures = mobilePointerGesturesEnabled()
+    canvas.dataset.pointerGestures = pointerGestures ? 'enabled' : 'legacy'
+    const gestureController = new GestureController({
+      onTap: (event) => engine.pointerTap(event.point.x, event.point.y),
+      onHold: (event) => engine.pointerHold(event.point.x, event.point.y),
+      onDragStart: (_, origin) => engine.pointerDragStart(origin.x, origin.y),
+      onDragMove: (event) => engine.pointerDragMove(event.point.x, event.point.y),
+      onDragEnd: () => engine.pointerDragEnd(),
+      onCancel: () => engine.pointerCancel(),
+    })
+    const normalizedPointerEvent = (event: PointerEvent) => ({
+      pointerId: event.pointerId,
+      pointerType: (
+        event.pointerType === 'pen' || event.pointerType === 'touch'
+          ? event.pointerType
+          : 'mouse'
+      ) as PointerKind,
+      point: { x: event.clientX, y: event.clientY },
+      timeStamp: event.timeStamp,
+    })
+    const shouldOwnPointer = (event: PointerEvent) =>
+      pointerGestures &&
+      (event.pointerType === 'touch' || event.pointerType === 'pen')
+    const ownEvent = (event: PointerEvent) => {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!shouldOwnPointer(event)) return
+      ownEvent(event)
+      if (gestureController.pointerDown(normalizedPointerEvent(event))) {
+        try {
+          canvas.setPointerCapture(event.pointerId)
+        } catch {
+          // Synthetic automation pointers are not always eligible for capture.
+        }
+      }
+    }
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!shouldOwnPointer(event)) return
+      ownEvent(event)
+      gestureController.pointerMove(normalizedPointerEvent(event))
+    }
+    const handlePointerUp = (event: PointerEvent) => {
+      if (!shouldOwnPointer(event)) return
+      ownEvent(event)
+      gestureController.pointerUp(normalizedPointerEvent(event))
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId)
+      }
+    }
+    const handlePointerCancel = (event: PointerEvent) => {
+      if (!shouldOwnPointer(event)) return
+      ownEvent(event)
+      gestureController.pointerCancel(event.pointerId)
+    }
+    canvas.addEventListener('pointerdown', handlePointerDown, true)
+    canvas.addEventListener('pointermove', handlePointerMove, true)
+    canvas.addEventListener('pointerup', handlePointerUp, true)
+    canvas.addEventListener('pointercancel', handlePointerCancel, true)
     if (!suspendedRef.current) engine.startEmptySingletonEditing()
     const debugBridge = {
       snapshot: () => engine.getSnapshot(),
@@ -374,6 +439,11 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     motionQuery.addEventListener('change', updateMotionPreference)
 
     return () => {
+      canvas.removeEventListener('pointerdown', handlePointerDown, true)
+      canvas.removeEventListener('pointermove', handlePointerMove, true)
+      canvas.removeEventListener('pointerup', handlePointerUp, true)
+      canvas.removeEventListener('pointercancel', handlePointerCancel, true)
+      gestureController.dispose()
       motionQuery.removeEventListener('change', updateMotionPreference)
       if (window.__VORONOI_DEBUG__ === debugBridge) {
         delete window.__VORONOI_DEBUG__
