@@ -89,6 +89,7 @@ interface VoronoiStageProps {
   suspended: boolean
   clusteringWave: boolean
   viewportInsets: ViewportInsets
+  mobileEditing: boolean
   onPostProcessingStatus: (status: PostProcessStatus) => void
   onHistoryChanged: (canUndo: boolean, canRedo: boolean) => void
   onEditingChanged?: (editing: boolean) => void
@@ -116,6 +117,10 @@ export interface VoronoiStageHandle {
   splitSelectedCell: (count: number) => boolean
   mergeSelectedWithNearest: () => boolean
   finishTouchMultiSelect: () => void
+  commitEditing: () => void
+  cancelEditing: () => void
+  undoEditingDraft: () => void
+  redoEditingDraft: () => void
   setTextVariants: (
     cellId: string,
     sourceHash: string,
@@ -134,6 +139,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   suspended,
   clusteringWave,
   viewportInsets,
+  mobileEditing,
   onPostProcessingStatus,
   onHistoryChanged,
   onEditingChanged,
@@ -147,6 +153,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const postProcessCanvasRef = useRef<HTMLCanvasElement>(null)
   const wallTextureCanvasRef = useRef<HTMLCanvasElement>(null)
   const editorRef = useRef<HTMLTextAreaElement>(null)
+  const composingRef = useRef(false)
   const engineRef = useRef<VoronoiCanvasEngine>(null)
   const postProcessorRef = useRef<MicroscopePostProcessor>(null)
   const onSelectionChangedRef = useRef(onSelectionChanged)
@@ -184,8 +191,12 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     progress: number,
   ) => {
     const sourceFontSize = Math.max(6, layout.textLayout.fontSize || layout.fontSize)
+    const visualViewport = window.visualViewport
     const responsiveFocusedSize = clamp(
-      Math.min(window.innerWidth, window.innerHeight) * 0.019,
+      Math.min(
+        visualViewport?.width ?? window.innerWidth,
+        visualViewport?.height ?? window.innerHeight,
+      ) * 0.019,
       11,
       16,
     )
@@ -592,6 +603,16 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
         engineRef.current?.mergeSelectedWithNearest() ?? false,
       finishTouchMultiSelect: () =>
         engineRef.current?.finishTouchMultiSelect(),
+      commitEditing: () => commitEditing(),
+      cancelEditing: () => cancelEditing(),
+      undoEditingDraft: () => {
+        editorRef.current?.focus({ preventScroll: true })
+        document.execCommand('undo')
+      },
+      redoEditingDraft: () => {
+        editorRef.current?.focus({ preventScroll: true })
+        document.execCommand('redo')
+      },
       setTextVariants: (cellId, sourceHash, metadata) =>
         engineRef.current?.setTextVariants(cellId, sourceHash, metadata) ?? false,
     }),
@@ -613,7 +634,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     onEditingChanged?.(Boolean(editing))
   }, [editing, onEditingChanged])
 
-  const finishEditingWithTransition = (kind: 'commit' | 'cancel') => {
+  function finishEditingWithTransition(kind: 'commit' | 'cancel') {
     const active = editingRef.current
     if (!active) return
     if (kind === 'commit') {
@@ -649,13 +670,13 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     return () => document.removeEventListener('pointerdown', commitFromOutside)
   }, [editing])
 
-  const commitEditing = () => {
-    if (!editing || editingRef.current?.id !== editing.id) return
+  function commitEditing() {
+    if (!editingRef.current) return
     finishEditingWithTransition('commit')
   }
 
-  const cancelEditing = () => {
-    if (!editing || editingRef.current?.id !== editing.id) return
+  function cancelEditing() {
+    if (!editingRef.current) return
     finishEditingWithTransition('cancel')
   }
 
@@ -664,7 +685,15 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       event.preventDefault()
       event.stopPropagation()
       cancelEditing()
-    } else if (event.key === 'Enter' && !event.shiftKey) {
+    } else if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !composingRef.current &&
+      (!mobileEditing ||
+        editing?.presentation === 'inline' ||
+        event.metaKey ||
+        event.ctrlKey)
+    ) {
       event.preventDefault()
       event.stopPropagation()
       commitEditing()
@@ -764,9 +793,14 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const applyFocusVisual = (progress: number) => {
     const bounded = clamp(progress, 0, 1)
     const focusSettings = settingsRef.current.editFocus
+    const visualViewport = window.visualViewport
     const orbitOrigin = {
-      x: window.innerWidth / 2,
-      y: window.innerHeight * focusSettings.arcDepth,
+      x:
+        (visualViewport?.offsetLeft ?? 0) +
+        (visualViewport?.width ?? window.innerWidth) / 2,
+      y:
+        (visualViewport?.offsetTop ?? 0) +
+        (visualViewport?.height ?? window.innerHeight) * focusSettings.arcDepth,
     }
     let scene: FocusSceneState
     if (focusSettings.trackTransitionEnabled) {
@@ -1032,6 +1066,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
             placeholder={editing.ghostPrompt}
             rows={5}
             spellCheck
+            enterKeyHint={editing.presentation === 'inline' ? 'done' : 'enter'}
             style={{
               '--editor-caret': settings.palette.text,
               '--editor-text': settings.palette.text,
@@ -1052,6 +1087,12 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
               )
             }
             onKeyDown={handleEditorKeyDown}
+            onCompositionStart={() => {
+              composingRef.current = true
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false
+            }}
             onPointerDown={stopEditorPointer}
           />
         </>

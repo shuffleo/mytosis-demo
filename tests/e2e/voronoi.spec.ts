@@ -1941,6 +1941,39 @@ test('feature-flagged touch gestures select, edit, and enter multi-select', asyn
     .toEqual(['cell-1', 'cell-2'])
 })
 
+test('uses mobile editor controls and touch-visible list grouping actions', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByTestId('tool-select').click()
+  const point = await sitePoint(page, 'cell-4')
+  await page.mouse.click(point.x, point.y)
+  await page.getByTestId('selected-cell-actions').getByRole('button', {
+    name: 'Edit',
+  }).click()
+  const editor = page.getByTestId('cell-editor')
+  await expect(editor).toBeFocused()
+  await expect(page.getByTestId('editor-accessory-bar')).toBeVisible()
+  await expect(page.getByRole('toolbar', { name: 'Canvas tools' })).toHaveCount(0)
+  await editor.fill('First line')
+  await editor.press('Enter')
+  await expect(editor).toHaveValue('First line\n')
+  await page.getByTestId('editor-accessory-bar').getByRole('button', {
+    name: 'Done',
+  }).click()
+  await expect(editor).toHaveCount(0)
+
+  await page.getByTestId('list-view-toggle').click()
+  await expect(page.getByTestId('list-view')).toBeVisible()
+  const row = page.getByTestId('list-row-cell-2')
+  await expect(row.getByRole('button', { name: 'Group' })).toBeVisible()
+  await row.getByRole('button', { name: 'Group' }).click()
+  await expect(page.getByTestId('list-row-cell-2')).toHaveAttribute('data-depth', '1')
+  await expect(
+    page.getByTestId('list-row-cell-2').getByRole('button', { name: 'Ungroup' }),
+  ).toBeVisible()
+})
+
 test('New Select delays sticky merge, uses explicit split, and keeps both reversible', async ({ page }) => {
   await page.getByTestId('tool-select').click()
   const beforeInteraction = await snapshot(page)

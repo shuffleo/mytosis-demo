@@ -3,6 +3,7 @@ import { runLocalClustering } from './clustering-client'
 import type { ClusteringProgress } from './clustering'
 import { ControlPanel } from './ControlPanel'
 import { DateRail } from './DateRail'
+import { EditorAccessoryBar } from './EditorAccessoryBar'
 import { createJournalStore } from './journal-store'
 import { ListEditor } from './ListEditor'
 import { prepareListDocumentForMicroscope } from './list-model'
@@ -135,6 +136,11 @@ function App() {
     !stageEditing &&
     !panelOpen &&
     !clusteringActive &&
+    (responsive.coarsePointer ||
+      responsive.layout.className === 'compact-portrait' ||
+      responsive.layout.className === 'compact-landscape')
+  const mobileEditing =
+    stageEditing &&
     (responsive.coarsePointer ||
       responsive.layout.className === 'compact-portrait' ||
       responsive.layout.className === 'compact-landscape')
@@ -540,9 +546,13 @@ function App() {
         suspended={view === 'list'}
         clusteringWave={clusteringActive}
         viewportInsets={responsive.layout.usable}
+        mobileEditing={mobileEditing}
         onPostProcessingStatus={setPostProcessingStatus}
         onHistoryChanged={handleHistoryChanged}
-        onEditingChanged={setStageEditing}
+        onEditingChanged={(editing) => {
+          setStageEditing(editing)
+          if (editing) setPanelOpen(false)
+        }}
         onModeChanged={setMode}
         onCanonicalTextChanged={scheduleAdaptiveText}
         onSelectionChanged={(ids) => {
@@ -586,7 +596,8 @@ function App() {
           onDone={() => stageRef.current?.finishTouchMultiSelect()}
         />
       ) : null}
-      <ToolbarDock
+      {!mobileEditing ? (
+        <ToolbarDock
         viewMode={view}
         activeTool={mode === 'add' ? 'addCell' : 'select'}
         selectionCount={selectedCellIds.length}
@@ -615,8 +626,16 @@ function App() {
         }}
         onCultivate={() => setAutoGrowth((current) => !current)}
         onOpenList={openListView}
-        onReturnMicroscope={closeListView}
-      />
+          onReturnMicroscope={closeListView}
+        />
+      ) : (
+        <EditorAccessoryBar
+          onCancel={() => stageRef.current?.cancelEditing()}
+          onUndo={() => stageRef.current?.undoEditingDraft()}
+          onRedo={() => stageRef.current?.redoEditingDraft()}
+          onDone={() => stageRef.current?.commitEditing()}
+        />
+      )}
 
       {viewTransition && <div className="view-transition-curtain" aria-hidden="true" />}
 
@@ -645,7 +664,7 @@ function App() {
           />
         </aside>
       )}
-      {view === 'microscope' && (
+      {view === 'microscope' && !mobileEditing && (
         <button
           className={`settings-toggle ${panelOpen ? 'is-open' : ''}`}
           data-testid="settings-toggle"

@@ -48,6 +48,20 @@ export function ListEditor({ document, onChange, onCommit }: ListEditorProps) {
     })
   }, [document, rows])
 
+  useEffect(() => {
+    const keepActiveRowVisible = () => {
+      const active = globalThis.document.activeElement
+      if (!(active instanceof HTMLTextAreaElement) || !active.dataset.listCell) return
+      active.scrollIntoView({ block: 'nearest' })
+    }
+    window.visualViewport?.addEventListener('resize', keepActiveRowVisible)
+    window.visualViewport?.addEventListener('scroll', keepActiveRowVisible)
+    return () => {
+      window.visualViewport?.removeEventListener('resize', keepActiveRowVisible)
+      window.visualViewport?.removeEventListener('scroll', keepActiveRowVisible)
+    }
+  }, [])
+
   const focusAdjacent = (cellId: string, direction: -1 | 1, caret: number) => {
     const currentIndex = rows.findIndex((row) => row.cellId === cellId)
     const target = rows[currentIndex + direction]
@@ -111,12 +125,19 @@ export function ListEditor({ document, onChange, onCommit }: ListEditorProps) {
                 value={cell.text}
                 rows={1}
                 placeholder={reflectiveContentProvider.manualGhostPrompt(cell.creation.order)}
+                onFocus={(event) =>
+                  event.currentTarget.scrollIntoView({ block: 'nearest' })
+                }
                 onChange={(event) =>
                   onChange(updateListCellText(document, cell.id, event.currentTarget.value))
                 }
                 onBlur={() => onCommit(document, 'list-text-edit')}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
+                  if (
+                    event.key === 'Enter' &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
                     event.preventDefault()
                     const result = splitListCellAt(
                       document,
@@ -183,6 +204,33 @@ export function ListEditor({ document, onChange, onCommit }: ListEditorProps) {
                   }
                 }}
               />
+              <span className="list-row-actions" aria-label="Row grouping actions">
+                {row.depth > 0 ? (
+                  <button
+                    type="button"
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      const next = outdentListCell(document, cell.id)
+                      onChange(next)
+                      onCommit(next, 'list-ungroup')
+                    }}
+                  >
+                    Ungroup
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      const next = indentListCell(document, cell.id)
+                      onChange(next)
+                      onCommit(next, 'list-group')
+                    }}
+                  >
+                    Group
+                  </button>
+                )}
+              </span>
             </div>
           )
         })}
