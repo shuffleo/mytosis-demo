@@ -893,7 +893,62 @@ export class VoronoiCanvasEngine {
 
   finishTouchMultiSelect() {
     this.touchMultiSelect = false
+    const primary = this.state.selectedCellIds[0] ?? null
+    this.state.selectedCellId = primary
+    this.state.selectedCellIds = primary ? [primary] : []
+    this.notifySelectionChanged()
     this.updateCanvasState()
+  }
+
+  editSelectedCell() {
+    const cellId = this.state.selectedCellId
+    if (!cellId || this.state.selectedCellIds.length !== 1) return false
+    const cell = this.findCell(cellId)
+    if (!cell || cell.kind !== 'journal') return false
+    this.startEditing(cellId)
+    return true
+  }
+
+  recommendedSplitCount() {
+    const cell = this.state.selectedCellId
+      ? this.findCell(this.state.selectedCellId)
+      : undefined
+    if (!cell || cell.kind !== 'journal') return null
+    return clamp(
+      Math.round(cell.text.trim().split(/\s+/).filter(Boolean).length / 4),
+      2,
+      4,
+    )
+  }
+
+  splitSelectedCell(count: number) {
+    const cellId = this.state.selectedCellId
+    if (!cellId || this.state.selectedCellIds.length !== 1) return false
+    const before = this.model.cells.length
+    this.splitCell(cellId, clamp(Math.round(count), 2, 4))
+    return this.model.cells.length !== before
+  }
+
+  mergeSelectedWithNearest() {
+    const source = this.state.selectedCellId
+      ? this.findCell(this.state.selectedCellId)
+      : undefined
+    if (!source || source.kind !== 'journal') return false
+    const target = this.model.cells
+      .filter(
+        (candidate) =>
+          candidate.id !== source.id &&
+          candidate.kind === 'journal' &&
+          candidate.groupId === source.groupId,
+      )
+      .sort(
+        (first, second) =>
+          distance(first.site, source.site) - distance(second.site, source.site) ||
+          first.id.localeCompare(second.id),
+      )[0]
+    if (!target) return false
+    this.mergeCells(source.id, target.id)
+    return true
   }
 
   setAutoGrowth(enabled: boolean) {
@@ -1826,18 +1881,6 @@ export class VoronoiCanvasEngine {
       }
     } else if (mergeIntent?.targetId && gesture && 'cellId' in gesture) {
       this.mergeCells(gesture.cellId, mergeIntent.targetId)
-    } else if (
-      mergeIntent &&
-      !mergeIntent.moved &&
-      gesture &&
-      'cellId' in gesture &&
-      (this.lastFrameTime - mergeIntent.startedAt) * 1000 >=
-        this.settings.mergeSplit.longPressMs
-    ) {
-      // Commit a stationary long-press split on release. Deferring the model
-      // mutation prevents a busy frame from splitting a cell before an
-      // immediately-following drag event can be delivered.
-      this.splitCell(gesture.cellId)
     } else if (gesture?.kind === 'merge') {
       if (gesture.targetId) {
         this.mergeCells(gesture.cellId, gesture.targetId)
@@ -2342,14 +2385,14 @@ export class VoronoiCanvasEngine {
     this.callbacks.onCanonicalTextChanged?.(merged.id, merged.text)
   }
 
-  private splitCell(cellId: string) {
+  private splitCell(cellId: string, requestedCount?: number) {
     const cell = this.findCell(cellId)
     if (!cell || cell.kind !== 'journal') return
     const gesture = this.state.gesture
     if (!gesture || !('historyCaptured' in gesture) || !gesture.historyCaptured) {
       this.checkpoint('split-cell')
     }
-    const desiredCount = clamp(
+    const desiredCount = requestedCount ?? clamp(
       Math.round(cell.text.trim().split(/\s+/).filter(Boolean).length / 4),
       this.settings.mergeSplit.splitMin,
       this.settings.mergeSplit.splitMax,
@@ -2906,15 +2949,6 @@ export class VoronoiCanvasEngine {
     const gesture = this.state.gesture
     if (!gesture || !('cellId' in gesture)) return
     if (gesture.kind === 'merge') {
-      if (
-        gesture.moved ||
-        gesture.splitTriggered ||
-        (time - gesture.startedAt) * 1000 < this.settings.mergeSplit.longPressMs
-      ) {
-        return
-      }
-      gesture.splitTriggered = true
-      this.splitCell(gesture.cellId)
       return
     }
     const intent = this.mergeIntentFor(gesture)

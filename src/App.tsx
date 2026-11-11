@@ -16,6 +16,7 @@ import {
   type VoronoiDocument,
 } from './model'
 import { cloneSettings, defaultSettings } from './settings'
+import { SelectedCellActions } from './SelectedCellActions'
 import { ToolbarDock } from './ToolbarDock'
 import { VoronoiStage, type VoronoiStageHandle } from './VoronoiStage'
 import type { CanvasMode } from './voronoi-engine'
@@ -72,6 +73,8 @@ function App() {
   const panelBeforeClusterRef = useRef(false)
   const [mode, setMode] = useState<CanvasMode>('select')
   const [selectedCellIds, setSelectedCellIds] = useState<string[]>([])
+  const [recommendedSplitCount, setRecommendedSplitCount] =
+    useState<number | null>(null)
   const [view, setView] = useState<'microscope' | 'list'>(() =>
     new URLSearchParams(window.location.search).get('view') === 'microscope'
       ? 'microscope'
@@ -127,6 +130,14 @@ function App() {
   } | null>(null)
   const clusteringActive = clustering !== null
   const transitionActive = viewTransition !== null || dateTransition !== null
+  const showTouchActions =
+    view === 'microscope' &&
+    !stageEditing &&
+    !panelOpen &&
+    !clusteringActive &&
+    (responsive.coarsePointer ||
+      responsive.layout.className === 'compact-portrait' ||
+      responsive.layout.className === 'compact-landscape')
   const handleHistoryChanged = useCallback((canUndo: boolean, canRedo: boolean) => {
     setHistoryState({ canUndo, canRedo })
   }, [])
@@ -534,7 +545,14 @@ function App() {
         onEditingChanged={setStageEditing}
         onModeChanged={setMode}
         onCanonicalTextChanged={scheduleAdaptiveText}
-        onSelectionChanged={(ids) => setSelectedCellIds([...ids])}
+        onSelectionChanged={(ids) => {
+          setSelectedCellIds([...ids])
+          setRecommendedSplitCount(
+            ids.length === 1
+              ? stageRef.current?.recommendedSplitCount() ?? null
+              : null,
+          )
+        }}
       />
       {view === 'list' && listDocument && (
         <ListEditor
@@ -552,6 +570,22 @@ function App() {
           disabled={clusteringActive || transitionActive}
         />
       </div>
+      {showTouchActions ? (
+        <SelectedCellActions
+          selectionCount={selectedCellIds.length}
+          recommendedSplitCount={recommendedSplitCount}
+          onEdit={() => stageRef.current?.editSelectedCell()}
+          onSplit={(count) => stageRef.current?.splitSelectedCell(count)}
+          onMergeNearest={() => stageRef.current?.mergeSelectedWithNearest()}
+          onGroup={() => {
+            if (stageRef.current?.groupSelectedCells()) {
+              setSelectedCellIds([])
+              setMode('select')
+            }
+          }}
+          onDone={() => stageRef.current?.finishTouchMultiSelect()}
+        />
+      ) : null}
       <ToolbarDock
         viewMode={view}
         activeTool={mode === 'add' ? 'addCell' : 'select'}

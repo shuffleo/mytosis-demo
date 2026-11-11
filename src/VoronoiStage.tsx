@@ -111,6 +111,11 @@ export interface VoronoiStageHandle {
   dieFirstSeed: () => boolean
   addCellAtCentroid: () => boolean
   groupSelectedCells: () => boolean
+  editSelectedCell: () => boolean
+  recommendedSplitCount: () => number | null
+  splitSelectedCell: (count: number) => boolean
+  mergeSelectedWithNearest: () => boolean
+  finishTouchMultiSelect: () => void
   setTextVariants: (
     cellId: string,
     sourceHash: string,
@@ -578,6 +583,15 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       addCellAtCentroid: () => engineRef.current?.addCellAtCentroid() ?? false,
       groupSelectedCells: () =>
         engineRef.current?.groupSelectedCells() ?? false,
+      editSelectedCell: () => engineRef.current?.editSelectedCell() ?? false,
+      recommendedSplitCount: () =>
+        engineRef.current?.recommendedSplitCount() ?? null,
+      splitSelectedCell: (count) =>
+        engineRef.current?.splitSelectedCell(count) ?? false,
+      mergeSelectedWithNearest: () =>
+        engineRef.current?.mergeSelectedWithNearest() ?? false,
+      finishTouchMultiSelect: () =>
+        engineRef.current?.finishTouchMultiSelect(),
       setTextVariants: (cellId, sourceHash, metadata) =>
         engineRef.current?.setTextVariants(cellId, sourceHash, metadata) ?? false,
     }),

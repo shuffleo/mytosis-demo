@@ -1941,7 +1941,7 @@ test('feature-flagged touch gestures select, edit, and enter multi-select', asyn
     .toEqual(['cell-1', 'cell-2'])
 })
 
-test('New Select delays sticky merge, long-press splits, and keeps both reversible', async ({ page }) => {
+test('New Select delays sticky merge, uses explicit split, and keeps both reversible', async ({ page }) => {
   await page.getByTestId('tool-select').click()
   const beforeInteraction = await snapshot(page)
   const targetAreaBefore = polygonArea(beforeInteraction.cells['cell-2'])
@@ -2001,15 +2001,13 @@ test('New Select delays sticky merge, long-press splits, and keeps both reversib
 
   state = await snapshot(page)
   const splitSource = state.model.cells.find((cell) => cell.transformation?.kind === 'merge')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.waitForTimeout(240)
   const splitPoint = await sitePoint(page, splitSource?.id ?? '')
-  await page.mouse.move(splitPoint.x, splitPoint.y)
-  await page.mouse.down()
-  await page.waitForTimeout(300)
-  expect(
-    (await snapshot(page)).interactionEffects[splitSource?.id ?? '']?.wallJitterPx,
-  ).toBeGreaterThan(0)
-  await page.waitForTimeout(850)
-  await page.mouse.up()
+  await page.mouse.click(splitPoint.x, splitPoint.y)
+  await expect(page.getByTestId('selected-cell-actions')).toBeVisible()
+  await page.getByRole('button', { name: 'Split', exact: true }).click()
+  await page.getByRole('menuitem', { name: /^2 cells/ }).click()
   await expect.poll(async () => (await snapshot(page)).cellCount).toBeGreaterThan(11)
   state = await snapshot(page)
   const splitCells = state.model.cells.filter((cell) => cell.transformation?.kind === 'split')
