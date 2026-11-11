@@ -612,6 +612,55 @@ test('toggles vignette, lens, and CRT independently with live parameters', async
   await expect(page.getByTestId('microscope-canvas')).toBeVisible()
 })
 
+test('applies focused vignette enable and intensity to the text overlay', async ({
+  page,
+}) => {
+  await page.getByTestId('settings-toggle').click()
+  const panel = page.getByTestId('settings-panel')
+  const profile = panel.getByLabel('profile', { exact: true })
+  await profile.selectOption({ label: 'Focused edit' })
+  await setNumericBinding(page, 'intensity', 0)
+  await page.getByTestId('settings-toggle').click()
+
+  await page.getByTestId('tool-select').click()
+  const point = await sitePoint(page, 'cell-4')
+  await page.mouse.dblclick(point.x, point.y, { delay: 70 })
+  await expect(page.getByTestId('microscope-text-overlay')).toBeVisible()
+  const zeroIntensity = await page.locator('.voronoi-stage').evaluate((stage) => {
+    const style = getComputedStyle(stage)
+    return {
+      dim: Number.parseFloat(style.getPropertyValue('--focus-overlay-dim')),
+      blur: Number.parseFloat(style.getPropertyValue('--focus-overlay-blur')),
+    }
+  })
+  expect(zeroIntensity).toEqual({ dim: 0, blur: 0 })
+  await page.getByTestId('cell-editor').press('Escape')
+  await expect(page.getByTestId('cell-editor')).toHaveCount(0)
+  await expect
+    .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
+    .toBe('idle')
+
+  await page.getByTestId('settings-toggle').click()
+  await profile.selectOption({ label: 'Focused edit' })
+  await setNumericBinding(page, 'intensity', 1)
+  await panel
+    .getByLabel('enabled', { exact: true })
+    .first()
+    .evaluate((element: HTMLInputElement) => element.click())
+  expect((await snapshot(page)).settings.effects.focusVignette.enabled).toBe(false)
+  await page.getByTestId('settings-toggle').click()
+  await page.mouse.dblclick(point.x, point.y, { delay: 70 })
+  await expect(page.getByTestId('microscope-text-overlay')).toBeVisible()
+  const disabled = await page.locator('.voronoi-stage').evaluate((stage) => {
+    const style = getComputedStyle(stage)
+    return {
+      dim: Number.parseFloat(style.getPropertyValue('--focus-overlay-dim')),
+      blur: Number.parseFloat(style.getPropertyValue('--focus-overlay-blur')),
+    }
+  })
+  expect(disabled).toEqual({ dim: 0, blur: 0 })
+})
+
 test('exposes live grain and glow controls in the open microscope panel', async ({ page }) => {
   await page.getByTestId('settings-toggle').click()
   const panel = page.getByTestId('settings-panel')
@@ -2386,12 +2435,36 @@ test('pulls distant members inward, dwell-attaches at the wall, and preserves de
   await expect
     .poll(async () => (await snapshot(page)).groupCue?.ghostStrength ?? 0)
     .toBeGreaterThan(0)
-  expect(await page.evaluate(() => window.__VORONOI_DEBUG__!.serialize()))
-    .not.toContain('group-ghost:')
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await expect
+    .poll(async () => (await snapshot(page)).groupCue?.ghostStrength ?? -1)
+    .toBe(0)
+  const reducedCue = await snapshot(page)
+  expect(reducedCue.interactionEffects['cell-6']?.cellJitterPx).toBe(0)
+  await page.waitForTimeout(240)
+  expect((await snapshot(page)).groupCue?.strength).toBeCloseTo(
+    reducedCue.groupCue?.strength ?? -1,
+    3,
+  )
+  const cueDocument = await page.evaluate(
+    () => window.__VORONOI_DEBUG__!.serialize(),
+  )
+  expect(cueDocument).not.toContain('group-ghost:')
+  await page.evaluate((serialized) => {
+    window.__VORONOI_DEBUG__!.load(serialized)
+  }, cueDocument)
   await page.mouse.up()
-  await expect.poll(async () => (await snapshot(page)).groupCue).toBeNull()
+  await expect.poll(async () => {
+    const current = await snapshot(page)
+    return {
+      cue: current.groupCue,
+      gesture: current.gesture,
+      effects: Object.keys(current.interactionEffects),
+    }
+  }).toEqual({ cue: null, gesture: null, effects: [] })
   expect((await snapshot(page)).model.cells.find((cell) => cell.id === 'cell-6')?.groupId)
     .toBeUndefined()
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
   await page.getByTestId('settings-toggle').click()
   await panel.getByText('Groups', { exact: true }).click()
   await panel.getByText('Join / detach cues', { exact: true }).click()

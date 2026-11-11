@@ -780,6 +780,9 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const textOverlayVignette = focusedPresentation
     ? settings.effects.focusVignette
     : settings.effects.vignette
+  const textOverlayVignetteMix = textOverlayVignette.enabled
+    ? clamp(textOverlayVignette.intensity, 0, 1)
+    : 0
   const focusStyle = {
     '--focus-scale': String(focusScale),
     '--focus-x': `${focusTranslateX}px`,
@@ -796,10 +799,18 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     '--field-center-y': `${fieldBounds.center.y}px`,
     '--field-radius': `${fieldBounds.radius}px`,
     '--circle-edge-feather': `${settings.effects.circle.edgeFeatherPx}px`,
-    '--focus-overlay-dim': String(textOverlayVignette.dim * 0.34),
-    '--focus-overlay-blur': `${textOverlayVignette.blurRadius * 0.35}px`,
+    '--focus-overlay-dim': String(
+      textOverlayVignette.dim * textOverlayVignetteMix * 0.34,
+    ),
+    '--focus-overlay-blur': `${
+      textOverlayVignette.blurRadius * textOverlayVignetteMix * 0.35
+    }px`,
     '--focus-overlay-grain': String(
-      Math.min(0.14, settings.effects.circle.grain + textOverlayVignette.grain),
+      Math.min(
+        0.14,
+        settings.effects.circle.grain +
+          textOverlayVignette.grain * textOverlayVignetteMix,
+      ),
     ),
   } as CSSProperties
 

@@ -390,6 +390,7 @@ describe('refined control defaults', () => {
   it('adds transient group cue controls to version-fourteen settings', () => {
     const legacy = structuredClone(defaultSettings)
     legacy.schemaVersion = 14
+    legacy.group.detachThreshold = 0.8
     delete (legacy.group as Partial<typeof legacy.group>).cueFrequencyHz
     delete (legacy.group as Partial<typeof legacy.group>).cueCellAmplitudePx
     delete (legacy.group as Partial<typeof legacy.group>).cueWallAmplitudePx
@@ -408,6 +409,7 @@ describe('refined control defaults', () => {
       cueWallAmplitudePx: 2.4,
       cueStrokeExcitation: 4,
       cuePhaseOffset: 0.18,
+      detachThreshold: 0.4,
       ghostSizePx: 42,
       ghostRepulsion: 0.34,
       ghostResponse: 12,

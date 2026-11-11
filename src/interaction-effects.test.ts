@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  groupBoundaryProgress,
   groupCuePhase,
   groupCueStrength,
   mergeVibrationState,
@@ -91,5 +92,13 @@ describe('transient interaction effects', () => {
     expect(held).toBeCloseTo(0.5)
     expect(groupCuePhase(0.25, 2, 0)).toBeCloseTo(Math.PI)
     expect(groupCuePhase(0.25, 2, 0.25)).toBeCloseTo(Math.PI * 1.5)
+  })
+
+  it('keeps join strength continuous while crossing and penetrating a group wall', () => {
+    expect(groupBoundaryProgress(72, 72, false)).toBe(0)
+    expect(groupBoundaryProgress(0, 72, false)).toBeCloseTo(0.7)
+    expect(groupBoundaryProgress(0, 72, true)).toBeCloseTo(0.7)
+    expect(groupBoundaryProgress(36, 72, true)).toBeCloseTo(0.85)
+    expect(groupBoundaryProgress(72, 72, true)).toBe(1)
   })
 })

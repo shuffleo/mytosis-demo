@@ -91,6 +91,15 @@ export interface GroupCueStrengthInput {
   easing: InteractionEasing
 }
 
+export function groupBoundaryProgress(
+  distancePx: number,
+  thresholdPx: number,
+  inside: boolean,
+) {
+  const normalized = clamp01(distancePx / Math.max(1, thresholdPx))
+  return inside ? 0.7 + normalized * 0.3 : (1 - normalized) * 0.7
+}
+
 export function groupCueStrength({
   spatialProgress,
   dwellElapsedMs,

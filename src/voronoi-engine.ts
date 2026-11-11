@@ -40,6 +40,7 @@ import {
 } from './text-layout'
 import {
   easeInteraction,
+  groupBoundaryProgress,
   groupCuePhase,
   groupCueStrength,
   mergeVibrationState,
@@ -646,6 +647,7 @@ export class VoronoiCanvasEngine {
     this.expiryHistoryCaptured.clear()
     this.groupSlotLayouts.clear()
     this.groupTextFloors.clear()
+    this.resetTransientInteractionState()
     this.clearSelection()
     this.sourceDirtyToken += 1
     this.notifyHistoryChanged()
@@ -1158,8 +1160,7 @@ export class VoronoiCanvasEngine {
     this.groupSlotLayouts.clear()
     this.groupTextFloors.clear()
     this.history.clear()
-    this.editingDraftText = null
-    this.editingSelectionIndex = 0
+    this.resetTransientInteractionState()
     this.clearSelection()
     this.notifyHistoryChanged()
   }
@@ -1233,10 +1234,23 @@ export class VoronoiCanvasEngine {
     this.expiryHistoryCaptured.clear()
     this.groupSlotLayouts.clear()
     this.groupTextFloors.clear()
-    this.state.gesture = null
-    this.state.preview = null
+    this.resetTransientInteractionState()
     this.clearSelection()
     this.sourceDirtyToken += 1
+  }
+
+  private resetTransientInteractionState() {
+    this.state.gesture = null
+    this.state.preview = null
+    this.state.hoveredId = null
+    this.state.acquiringGroupId = null
+    this.state.editingId = null
+    this.editingDraftText = null
+    this.editingSelectionIndex = 0
+    this.previewSuppressedAt = null
+    this.activeGroupCue = null
+    this.groupGhostSlot = null
+    this.interactionEffects.clear()
   }
 
   private notifyHistoryChanged() {
@@ -3039,11 +3053,13 @@ export class VoronoiCanvasEngine {
       const point = this.pixelFromSite(source.site)
       const nearest = nearestPointOnPolygon(point, boundary)
       const threshold = Math.max(1, this.settings.group.attachDistancePx)
-      const spatialProgress = pointInPolygon(point, boundary)
-        ? 0.7 + clamp(nearest.distance / threshold, 0, 1) * 0.3
-        : clamp(1 - nearest.distance / threshold, 0, 1)
+      const spatialProgress = groupBoundaryProgress(
+        nearest.distance,
+        threshold,
+        pointInPolygon(point, boundary),
+      )
       const dwellElapsedMs =
-        gesture.attachCandidateSince === null
+        this.reducedMotion || gesture.attachCandidateSince === null
           ? 0
           : Math.max(0, time * 1000 - gesture.attachCandidateSince)
       return {
@@ -3064,7 +3080,7 @@ export class VoronoiCanvasEngine {
     const detach = this.detachCueGeometry(source, gesture.groupId)
     if (detach.pullProgress <= 0) return null
     const dwellElapsedMs =
-      gesture.detachCandidateSince === null
+      this.reducedMotion || gesture.detachCandidateSince === null
         ? 0
         : Math.max(0, time * 1000 - gesture.detachCandidateSince)
     return {
@@ -3083,6 +3099,10 @@ export class VoronoiCanvasEngine {
   }
 
   private updateGroupGhostSlot(delta: number) {
+    if (this.reducedMotion) {
+      this.groupGhostSlot = null
+      return
+    }
     const cue = this.activeGroupCue
     if (
       cue &&
@@ -3238,7 +3258,7 @@ export class VoronoiCanvasEngine {
         )
     const translation = {
       x: Math.sin(phase) * effect.cellJitterPx,
-      y: Math.cos(phase * 0.93) * effect.cellJitterPx * 0.72,
+      y: Math.cos(phase) * effect.cellJitterPx * 0.72,
     }
     return points.map((point, index) => {
       const dx = point.x - center.x

@@ -621,7 +621,13 @@ export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasS
     particles: { ...defaultSettings.particles, ...input.particles },
     motion: { ...defaultSettings.motion, ...input.motion },
     seed: { ...defaultSettings.seed, ...input.seed },
-    group: { ...defaultSettings.group, ...input.group },
+    group: {
+      ...defaultSettings.group,
+      ...input.group,
+      ...(sourceVersion <= 14
+        ? { detachThreshold: defaultSettings.group.detachThreshold }
+        : {}),
+    },
     mergeSplit: { ...defaultSettings.mergeSplit, ...input.mergeSplit },
     viewTransition: { ...defaultSettings.viewTransition, ...input.viewTransition },
     editFocus: { ...defaultSettings.editFocus, ...input.editFocus },
