@@ -1,11 +1,16 @@
 import { mapPostProcessedPoint, type PostProcessField } from './microscope-mapping'
 import type { Point2 } from './geometry'
 import type { CanvasSettings, VignetteSettings } from './settings'
+import {
+  qualityPixelRatioCap,
+  type RendererQualityTier,
+} from './render-quality'
 
 export type PostProcessStatus = 'live' | 'fallback'
 
 export interface PostProcessDebugSnapshot {
   status: PostProcessStatus
+  quality: RendererQualityTier
   active: boolean
   uploadCount: number
   renderCount: number
@@ -320,6 +325,7 @@ export class MicroscopePostProcessor {
   private uploadCount = 0
   private renderCount = 0
   private status: PostProcessStatus = 'fallback'
+  private quality: RendererQualityTier = 'high'
   private destroyed = false
   private suspended = false
   private activeUntil = performance.now() + 1800
@@ -373,6 +379,7 @@ export class MicroscopePostProcessor {
       this.output.hidden = true
     }
     this.output.dataset.postProcessStatus = this.status
+    this.output.dataset.quality = this.quality
     this.wallSource.dataset.compositeMode =
       this.status === 'live' ? 'pre-shader' : 'fallback-overlay'
     this.onStatusChange(this.status)
@@ -387,6 +394,14 @@ export class MicroscopePostProcessor {
     // changes. Always consume that notification, even after the shader has
     // gone idle; otherwise a slowly settling group wall can outlive the
     // post-process wake window and leave a permanently stale texture.
+    this.requestFrame(true)
+  }
+
+  setQuality(quality: RendererQualityTier) {
+    if (this.quality === quality) return
+    this.quality = quality
+    this.output.dataset.quality = quality
+    this.wake()
     this.requestFrame(true)
   }
 
@@ -412,10 +427,17 @@ export class MicroscopePostProcessor {
 
   mapPointer(point: Point2) {
     if (this.suspended || this.status !== 'live' || !this.anyEffectEnabled()) return { ...point }
+    const effects =
+      this.quality === 'low'
+        ? {
+            ...this.settings.effects,
+            crt: { ...this.settings.effects.crt, enabled: false },
+          }
+        : this.settings.effects
     return mapPostProcessedPoint(point, this.field, {
       ...this.settings,
       effects: {
-        ...this.settings.effects,
+        ...effects,
         vignette: this.effectiveVignette(),
       },
     })
@@ -439,6 +461,7 @@ export class MicroscopePostProcessor {
     const outputBounds = this.output.getBoundingClientRect()
     return {
       status: this.status,
+      quality: this.quality,
       active: !this.suspended && this.status === 'live' && this.anyEffectEnabled(),
       uploadCount: this.uploadCount,
       renderCount: this.renderCount,
@@ -584,7 +607,10 @@ export class MicroscopePostProcessor {
     // size, normalized optics, pointer mapping, and production resolution.
     const pixelRatio = navigator.webdriver
       ? 0.25
-      : Math.min(2, Math.max(1, window.devicePixelRatio || 1))
+      : Math.min(
+          qualityPixelRatioCap(this.quality),
+          Math.max(1, window.devicePixelRatio || 1),
+        )
     const width = Math.max(1, Math.round(cssWidth * pixelRatio))
     const height = Math.max(1, Math.round(cssHeight * pixelRatio))
     if (this.output.width !== width || this.output.height !== height) {
@@ -703,8 +729,12 @@ export class MicroscopePostProcessor {
     uniform1f('uFrost', lens.frost * pixelRatio)
     uniform1f('uGlow', lens.glow)
     uniform1f('uGlowRadius', lens.glowRadius * pixelRatio)
-    uniform1f('uCrtEnabled', crt.enabled ? 1 : 0)
-    uniform1f('uPhosphorScanlinesEnabled', crt.phosphorScanlinesEnabled ? 1 : 0)
+    const crtEnabled = this.quality !== 'low' && crt.enabled
+    uniform1f('uCrtEnabled', crtEnabled ? 1 : 0)
+    uniform1f(
+      'uPhosphorScanlinesEnabled',
+      crtEnabled && crt.phosphorScanlinesEnabled ? 1 : 0,
+    )
     uniform1f('uPhosphor', crt.phosphor)
     uniform1f('uScanlines', crt.scanlines)
     uniform1f('uColorShift', crt.colorShift * pixelRatio)

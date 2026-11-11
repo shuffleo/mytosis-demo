@@ -286,6 +286,7 @@ interface Snapshot {
 
 interface PostProcessSnapshot {
   status: 'live' | 'fallback'
+  quality: 'high' | 'balanced' | 'low'
   active: boolean
   uploadCount: number
   renderCount: number
@@ -516,6 +517,7 @@ test('uses exact microscope defaults and composites Paper text below sharp UI', 
 
   const post = await postProcessSnapshot(page)
   expect(post.status).toBe('live')
+  expect(post.quality).toBe('high')
   expect(post.active).toBe(true)
   expect(post.sourceIncludesPaperText).toBe(true)
   expect(post.pointerEvents).toBe('none')
@@ -543,6 +545,27 @@ test('uses exact microscope defaults and composites Paper text below sharp UI', 
     Number.parseInt(getComputedStyle(node).zIndex, 10),
   )
   expect(toolbarZ).toBeGreaterThan(outputZ)
+})
+
+test('derives a runtime-only mobile quality tier with a local override', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect
+    .poll(async () => (await postProcessSnapshot(page)).quality)
+    .toBe('balanced')
+  await page.getByTestId('settings-toggle').click()
+  const quality = page.getByLabel('Renderer quality')
+  await expect(quality).toHaveValue('auto')
+  await expect(quality.locator('option:checked')).toContainText('balanced')
+  await quality.selectOption('low')
+  await expect
+    .poll(async () => (await postProcessSnapshot(page)).quality)
+    .toBe('low')
+  expect(
+    await page.evaluate(() => localStorage.getItem('mytosis.renderer-quality')),
+  ).toBe('low')
+  expect((await snapshot(page)).settings.schemaVersion).toBe(16)
 })
 
 test('toggles vignette, lens, and CRT independently with live parameters', async ({ page }) => {
@@ -1972,6 +1995,24 @@ test('uses mobile editor controls and touch-visible list grouping actions', asyn
   await expect(
     page.getByTestId('list-row-cell-2').getByRole('button', { name: 'Ungroup' }),
   ).toBeVisible()
+})
+
+test('supports arrow-key toolbar and canvas cell traversal', async ({ page }) => {
+  const select = page.getByTestId('tool-select')
+  await select.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByTestId('tool-add')).toBeFocused()
+
+  await select.click()
+  const canvas = page.getByTestId('voronoi-canvas')
+  await canvas.focus()
+  await page.keyboard.press('ArrowRight')
+  const first = (await snapshot(page)).selectedId
+  expect(first).not.toBeNull()
+  await page.keyboard.press('ArrowRight')
+  expect((await snapshot(page)).selectedId).not.toBe(first)
+  await page.keyboard.press('Space')
+  expect((await snapshot(page)).selectionMode).toBe('multi')
 })
 
 test('New Select delays sticky merge, uses explicit split, and keeps both reversible', async ({ page }) => {

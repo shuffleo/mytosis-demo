@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react'
 import { runLocalClustering } from './clustering-client'
 import type { ClusteringProgress } from './clustering'
 import { ControlPanel } from './ControlPanel'
@@ -17,6 +24,10 @@ import {
   type VoronoiDocument,
 } from './model'
 import { cloneSettings, defaultSettings } from './settings'
+import {
+  chooseRendererQuality,
+  type RendererQualityPreference,
+} from './render-quality'
 import { SelectedCellActions } from './SelectedCellActions'
 import { ToolbarDock } from './ToolbarDock'
 import { VoronoiStage, type VoronoiStageHandle } from './VoronoiStage'
@@ -97,6 +108,13 @@ function App() {
   const [postProcessingStatus, setPostProcessingStatus] = useState<
     PostProcessStatus | 'checking'
   >('checking')
+  const [rendererQualityPreference, setRendererQualityPreference] =
+    useState<RendererQualityPreference>(() => {
+      const saved = window.localStorage.getItem('mytosis.renderer-quality')
+      return saved === 'high' || saved === 'balanced' || saved === 'low'
+        ? saved
+        : 'auto'
+    })
   const [adaptiveTextStatus, setAdaptiveTextStatus] =
     useState<AdaptiveTextRuntimeState>({
       phase: 'idle',
@@ -131,6 +149,20 @@ function App() {
   } | null>(null)
   const clusteringActive = clustering !== null
   const transitionActive = viewTransition !== null || dateTransition !== null
+  const rendererQuality = useMemo(
+    () =>
+      chooseRendererQuality({
+        preference: rendererQualityPreference,
+        layoutClass: responsive.layout.className,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        postProcessStatus: postProcessingStatus,
+      }),
+    [
+      postProcessingStatus,
+      rendererQualityPreference,
+      responsive.layout.className,
+    ],
+  )
   const showTouchActions =
     view === 'microscope' &&
     !stageEditing &&
@@ -481,10 +513,7 @@ function App() {
         controller.signal,
         updateProgress,
       )
-      const minimumCancellableWindow = Math.min(
-        5600,
-        Math.max(5000, settings.clustering.animationMs),
-      )
+      const minimumCancellableWindow = 450
       await abortableDelay(
         Math.max(0, minimumCancellableWindow - (performance.now() - startedAt)),
         controller.signal,
@@ -560,6 +589,7 @@ function App() {
         clusteringWave={clusteringActive}
         viewportInsets={responsive.layout.usable}
         mobileEditing={mobileEditing}
+        rendererQuality={rendererQuality}
         onPostProcessingStatus={setPostProcessingStatus}
         onHistoryChanged={handleHistoryChanged}
         onEditingChanged={(editing) => {
@@ -666,6 +696,31 @@ function App() {
 
       {view === 'microscope' && panelOpen && !clusteringActive && !transitionActive && (
         <aside className="settings-shell" aria-label="Canvas configuration">
+          <label className="renderer-quality-control">
+            <span>Renderer quality</span>
+            <select
+              aria-label="Renderer quality"
+              value={rendererQualityPreference}
+              onChange={(event) => {
+                const preference = event.currentTarget
+                  .value as RendererQualityPreference
+                setRendererQualityPreference(preference)
+                if (preference === 'auto') {
+                  window.localStorage.removeItem('mytosis.renderer-quality')
+                } else {
+                  window.localStorage.setItem(
+                    'mytosis.renderer-quality',
+                    preference,
+                  )
+                }
+              }}
+            >
+              <option value="auto">Auto · {rendererQuality}</option>
+              <option value="high">High</option>
+              <option value="balanced">Balanced</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
           <ControlPanel
             settings={settings}
             postProcessingStatus={postProcessingStatus}

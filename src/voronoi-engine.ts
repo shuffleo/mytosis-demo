@@ -1004,6 +1004,43 @@ export class VoronoiCanvasEngine {
       return
     }
     if (
+      this.state.mode === 'select' &&
+      !this.state.editingId &&
+      (key === 'ArrowLeft' ||
+        key === 'ArrowRight' ||
+        key === 'ArrowUp' ||
+        key === 'ArrowDown')
+    ) {
+      const ordered = this.model.layout.zOrder.filter((id) => {
+        const cell = this.findCell(id)
+        return cell?.kind === 'journal'
+      })
+      if (!ordered.length) return
+      const currentIndex = this.state.selectedCellId
+        ? ordered.indexOf(this.state.selectedCellId)
+        : -1
+      const backwards = key === 'ArrowLeft' || key === 'ArrowUp'
+      const nextIndex =
+        currentIndex < 0
+          ? 0
+          : (currentIndex + (backwards ? -1 : 1) + ordered.length) %
+            ordered.length
+      this.selectCell(ordered[nextIndex])
+      this.updateCanvasState()
+      return
+    }
+    if (
+      key === ' ' &&
+      this.state.mode === 'select' &&
+      this.state.selectedCellId &&
+      !this.state.editingId
+    ) {
+      this.touchMultiSelect = true
+      this.toggleCellSelection(this.state.selectedCellId)
+      this.updateCanvasState()
+      return
+    }
+    if (
       (key === 'Delete' || key === 'Backspace') &&
       this.state.mode === 'select' &&
       this.state.selectedCellId &&

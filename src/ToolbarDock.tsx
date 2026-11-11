@@ -99,6 +99,32 @@ export function ToolbarDock({
         className={`toolbar-dock toolbar-dock--${viewMode}`}
         role="toolbar"
         aria-label={viewMode === 'list' ? 'List view controls' : 'Canvas tools'}
+        onKeyDown={(event) => {
+          if (
+            event.key !== 'ArrowLeft' &&
+            event.key !== 'ArrowRight' &&
+            event.key !== 'ArrowUp' &&
+            event.key !== 'ArrowDown'
+          ) {
+            return
+          }
+          const buttons = Array.from(
+            event.currentTarget.querySelectorAll<HTMLButtonElement>(
+              'button:not(:disabled)',
+            ),
+          )
+          const currentIndex = buttons.indexOf(
+            document.activeElement as HTMLButtonElement,
+          )
+          if (currentIndex < 0 || buttons.length < 2) return
+          event.preventDefault()
+          const backwards =
+            event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+          const nextIndex =
+            (currentIndex + (backwards ? -1 : 1) + buttons.length) %
+            buttons.length
+          buttons[nextIndex]?.focus()
+        }}
       >
       <div className="toolbar-capsule toolbar-capsule--history" role="group" aria-label="History">
         <button

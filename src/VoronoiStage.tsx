@@ -29,6 +29,7 @@ import type { CanvasSettings } from './settings'
 import { nearestCaretIndex } from './text-layout'
 import { WallTextureRenderer } from './wall-texture-renderer'
 import type { AdaptiveTextVariantMetadata } from './adaptive-text'
+import type { RendererQualityTier } from './render-quality'
 import {
   GestureController,
   mobilePointerGesturesEnabled,
@@ -90,6 +91,7 @@ interface VoronoiStageProps {
   clusteringWave: boolean
   viewportInsets: ViewportInsets
   mobileEditing: boolean
+  rendererQuality: RendererQualityTier
   onPostProcessingStatus: (status: PostProcessStatus) => void
   onHistoryChanged: (canUndo: boolean, canRedo: boolean) => void
   onEditingChanged?: (editing: boolean) => void
@@ -140,6 +142,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   clusteringWave,
   viewportInsets,
   mobileEditing,
+  rendererQuality,
   onPostProcessingStatus,
   onHistoryChanged,
   onEditingChanged,
@@ -518,6 +521,10 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   }, [viewportInsets])
 
   useEffect(() => {
+    postProcessorRef.current?.setQuality(rendererQuality)
+  }, [rendererQuality])
+
+  useEffect(() => {
     if (seedAuditRequest === previousSeedAuditRequestRef.current) return
     previousSeedAuditRequestRef.current = seedAuditRequest
     engineRef.current?.forceSpawnSeed()
@@ -701,7 +708,13 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   }
 
   const handleCanvasKeyDown = (event: KeyboardEvent<HTMLCanvasElement>) => {
-    if (event.key === 'Escape' || event.key === 'Delete' || event.key === 'Backspace') {
+    if (
+      event.key === 'Escape' ||
+      event.key === 'Delete' ||
+      event.key === 'Backspace' ||
+      event.key === ' ' ||
+      event.key.startsWith('Arrow')
+    ) {
       event.preventDefault()
       engineRef.current?.handleKey(event.key)
       return

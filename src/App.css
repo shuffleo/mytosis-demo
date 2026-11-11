@@ -768,7 +768,7 @@
 .clustering-status {
   position: fixed;
   z-index: 58;
-  top: max(20px, env(safe-area-inset-top));
+  top: calc(var(--date-chrome-height) + var(--safe-top) + 8px);
   left: 50%;
   display: flex;
   gap: 14px;
@@ -782,6 +782,27 @@
   font: 600 12px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
   transform: translateX(-50%);
   backdrop-filter: blur(14px);
+}
+
+@media (forced-colors: active) {
+  .toolbar-capsule,
+  .selected-cell-actions,
+  .selection-status-chip,
+  .editor-accessory-bar,
+  .settings-shell,
+  .date-calendar {
+    color: CanvasText;
+    border: 1px solid CanvasText;
+    background: Canvas;
+    forced-color-adjust: none;
+  }
+
+  .toolbar-icon-button:focus-visible,
+  .toolbar-labeled-button:focus-visible,
+  .selected-cell-actions button:focus-visible,
+  .editor-accessory-bar button:focus-visible {
+    outline: 2px solid Highlight;
+  }
 }
 
 .list-editor {
@@ -946,6 +967,32 @@
 .control-panel-stack {
   display: grid;
   gap: 8px;
+}
+
+.renderer-quality-control {
+  display: grid;
+  gap: 6px;
+  min-height: 48px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  color: #d8dfdb;
+  border: 1px solid rgba(211, 225, 217, 0.14);
+  background: rgba(19, 24, 21, 0.86);
+  font: 600 11px/1.2 Inter, ui-sans-serif, sans-serif;
+}
+
+.renderer-quality-control select {
+  min-height: 36px;
+  padding: 0 8px;
+  color: #edf2ef;
+  border: 1px solid rgba(211, 225, 217, 0.18);
+  border-radius: 0;
+  background: #202622;
+}
+
+.layout-compact-portrait .renderer-quality-control select,
+.layout-compact-landscape .renderer-quality-control select {
+  min-height: 44px;
 }
 
 .adaptive-text-status {
