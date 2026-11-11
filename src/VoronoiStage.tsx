@@ -27,6 +27,7 @@ import { deserializeDocument, serializeDocument } from './model'
 import type { CanvasSettings } from './settings'
 import { nearestCaretIndex } from './text-layout'
 import { WallTextureRenderer } from './wall-texture-renderer'
+import type { AdaptiveTextVariantMetadata } from './adaptive-text'
 
 declare global {
   interface Window {
@@ -86,6 +87,7 @@ interface VoronoiStageProps {
   onEditingChanged?: (editing: boolean) => void
   onSelectionChanged?: (selectedCellIds: readonly string[]) => void
   onModeChanged?: (mode: CanvasMode) => void
+  onCanonicalTextChanged?: (cellId: string, text: string) => void
 }
 
 export interface VoronoiStageHandle {
@@ -102,6 +104,11 @@ export interface VoronoiStageHandle {
   dieFirstSeed: () => boolean
   addCellAtCentroid: () => boolean
   groupSelectedCells: () => boolean
+  setTextVariants: (
+    cellId: string,
+    sourceHash: string,
+    metadata: AdaptiveTextVariantMetadata | undefined,
+  ) => boolean
 }
 
 export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(function VoronoiStage({
@@ -119,6 +126,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   onEditingChanged,
   onSelectionChanged,
   onModeChanged,
+  onCanonicalTextChanged,
 }, forwardedRef) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sourceSceneRef = useRef<HTMLDivElement>(null)
@@ -129,6 +137,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const engineRef = useRef<VoronoiCanvasEngine>(null)
   const postProcessorRef = useRef<MicroscopePostProcessor>(null)
   const onSelectionChangedRef = useRef(onSelectionChanged)
+  const onCanonicalTextChangedRef = useRef(onCanonicalTextChanged)
   const wallRendererRef = useRef<WallTextureRenderer>(null)
   const initialSettingsRef = useRef(settings)
   const initialDocumentRef = useRef(initialDocument)
@@ -262,7 +271,8 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
 
   useEffect(() => {
     onSelectionChangedRef.current = onSelectionChanged
-  }, [onSelectionChanged])
+    onCanonicalTextChangedRef.current = onCanonicalTextChanged
+  }, [onCanonicalTextChanged, onSelectionChanged])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -317,6 +327,8 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
           postProcessorRef.current?.setState(settingsRef.current, field, animated)
         },
         onHistoryChanged,
+        onCanonicalTextChanged: (cellId, text) =>
+          onCanonicalTextChangedRef.current?.(cellId, text),
         onWallFrame: (snapshot) => {
           if (wallRenderer.render(snapshot)) {
             postProcessorRef.current?.requestFrame(true)
@@ -451,7 +463,11 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
         if (!serialized || !active) return serialized
         const document = deserializeDocument(serialized)
         const cell = document.cells.find((candidate) => candidate.id === active.id)
-        if (cell) cell.text = editorRef.current?.value ?? active.value
+        if (cell) {
+          const text = editorRef.current?.value ?? active.value
+          if (text !== cell.text) delete cell.textVariants
+          cell.text = text
+        }
         return serializeDocument(document)
       },
       loadDocument: (serialized) => {
@@ -485,6 +501,8 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       addCellAtCentroid: () => engineRef.current?.addCellAtCentroid() ?? false,
       groupSelectedCells: () =>
         engineRef.current?.groupSelectedCells() ?? false,
+      setTextVariants: (cellId, sourceHash, metadata) =>
+        engineRef.current?.setTextVariants(cellId, sourceHash, metadata) ?? false,
     }),
     [],
   )

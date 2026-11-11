@@ -257,6 +257,7 @@ export function splitListCellAt(
   const before = source.text.slice(0, start).trimEnd()
   const after = source.text.slice(end).trimStart()
   source.text = before
+  delete source.textVariants
   source.incubation = before
     ? { state: 'revealed', sourceIds: [] }
     : { state: 'empty', sourceIds: [] }
@@ -296,6 +297,7 @@ export function updateListCellText(
   const cell = next.cells.find((candidate) => candidate.id === cellId)
   if (!cell) return next
   cell.text = text
+  delete cell.textVariants
   cell.incubation = cell.text.trim()
     ? { state: 'revealed', sourceIds: [] }
     : { state: 'empty', sourceIds: [] }

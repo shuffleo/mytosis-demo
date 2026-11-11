@@ -10,6 +10,7 @@ import {
   validateDocument,
 } from './model'
 import { defaultSettings } from './settings'
+import { canonicalTextHash } from './adaptive-text'
 
 describe('versioned canvas document', () => {
   it('creates a valid empty day without carrying fixture content', () => {
@@ -70,6 +71,38 @@ describe('versioned canvas document', () => {
     expect(restored.layout.clustering?.provider).toBe('local-tfidf')
     expect(restored.layout.history.lastCommand).toBe('autogroup')
     expect(restored).not.toBe(document)
+  })
+
+  it('persists optional adaptive variants while lazily migrating older documents', () => {
+    const document = createDefaultDocument()
+    const cell = document.cells[0]
+    cell.textVariants = {
+      sourceHash: canonicalTextHash(cell.text),
+      status: 'ready',
+      values: {
+        S: 'Protected a quiet hour before meetings.',
+        XS: 'Protected a quiet hour.',
+        XXS: 'Protected quiet time.',
+      },
+      provenance: 'on-device-model',
+      provider: 'transformers-js-worker',
+      model: 'small-local-model',
+      promptVersion: 'variants-v1',
+      generatedAtMs: 123,
+    }
+    expect(
+      deserializeDocument(serializeDocument(document)).cells[0].textVariants,
+    ).toEqual(cell.textVariants)
+
+    const legacy = JSON.parse(serializeDocument(document)) as {
+      cells: Array<Record<string, unknown>>
+      layout: { schemaVersion: number }
+    }
+    legacy.layout.schemaVersion = 4
+    delete legacy.cells[0].textVariants
+    const migrated = deserializeDocument(JSON.stringify(legacy))
+    expect(migrated.layout.schemaVersion).toBe(CANVAS_SCHEMA_VERSION)
+    expect(migrated.cells[0].textVariants).toBeUndefined()
   })
 
   it('rejects dangling group and relationship references', () => {

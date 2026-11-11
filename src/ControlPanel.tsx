@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Pane } from 'tweakpane'
 import type { PostProcessStatus } from './microscope-postprocess'
+import type { AdaptiveTextRuntimeState } from './adaptive-text-generator'
 import {
   cloneSettings,
   identifyPalettePreset,
@@ -32,6 +33,7 @@ const CONTROL_HINTS: Record<string, string> = {
   'Experimental merge / split': 'Enables sticky thought composition and long-press decomposition.',
   'View transition': 'Controls the optical zoom-level transition between microscope and list views.',
   'Focused text editing': 'Controls the fixed-lens scene transition used for cell text editing.',
+  'Adaptive text': 'Generates local shorter variants and chooses the longest copy that fits each cell.',
   Palette: 'Live colors for cells, walls, text, states, field, and exterior.',
   preset: 'Applies an accessible microscope-inspired cell palette without changing list view colors.',
   renderer: 'Shows whether the GPU microscope renderer is active.',
@@ -161,6 +163,10 @@ const CONTROL_HINTS: Record<string, string> = {
   'focus arc depth': 'Moves the focused-scene circular track centroid below the viewport.',
   'focus coverage': 'Sets how much of the microscope circle the focused cell occupies.',
   'focus easing': 'Chooses the focused editing camera timing curve.',
+  'local generation': 'Generates shorter variants in this browser without sending journal text to a server.',
+  'edit debounce ms': 'Wait after an edit before starting on-device generation.',
+  'fit font floor': 'Switches to a shorter variant before microscope text falls below this size.',
+  'fit hysteresis': 'Adds a stability margin before changing variants as cell geometry moves.',
   'Add seed': 'Immediately creates one valid auto-growth seed for auditing.',
   'Die seed': 'Starts the death animation of the oldest unexpanded seed.',
   'Reset defaults': 'Restores every control to the current reference defaults.',
@@ -173,6 +179,7 @@ function controlHint(label: string) {
 interface ControlPanelProps {
   settings: CanvasSettings
   postProcessingStatus: PostProcessStatus | 'checking'
+  adaptiveTextStatus: AdaptiveTextRuntimeState
   onChange: (settings: CanvasSettings) => void
   onAddSeed: () => void
   onDieSeed: () => void
@@ -182,6 +189,7 @@ interface ControlPanelProps {
 export function ControlPanel({
   settings,
   postProcessingStatus,
+  adaptiveTextStatus,
   onChange,
   onAddSeed,
   onDieSeed,
@@ -1025,6 +1033,29 @@ export function ControlPanel({
       options: { Smooth: 'smooth', Spring: 'spring', Linear: 'linear' },
     })
 
+    const adaptiveText = pane.addFolder({ title: 'Adaptive text', expanded: false })
+    adaptiveText.addBinding(params.adaptiveText, 'enabled', {
+      label: 'local generation',
+    })
+    adaptiveText.addBinding(params.adaptiveText, 'debounceMs', {
+      label: 'edit debounce ms',
+      min: 200,
+      max: 1800,
+      step: 50,
+    })
+    adaptiveText.addBinding(params.adaptiveText, 'fitMinimumFontSize', {
+      label: 'fit font floor',
+      min: 7,
+      max: 13,
+      step: 0.5,
+    })
+    adaptiveText.addBinding(params.adaptiveText, 'fitHysteresis', {
+      label: 'fit hysteresis',
+      min: 0,
+      max: 0.3,
+      step: 0.01,
+    })
+
     const palette = pane.addFolder({ title: 'Palette', expanded: false })
     const paletteChoice: { preset: PalettePresetId | 'custom' } = {
       preset: identifyPalettePreset(params.palette),
@@ -1090,6 +1121,7 @@ export function ControlPanel({
       Object.assign(params.viewTransition, defaults.viewTransition)
       Object.assign(params.editFocus, defaults.editFocus)
       Object.assign(params.clustering, defaults.clustering)
+      Object.assign(params.adaptiveText, defaults.adaptiveText)
       Object.assign(params.palette, defaults.palette)
       paletteChoice.preset = 'baseline'
       params.schemaVersion = defaults.schemaVersion
@@ -1119,6 +1151,22 @@ export function ControlPanel({
 
   return (
     <div className="control-panel-stack" data-testid="settings-panel">
+      <div
+        className={`adaptive-text-status is-${adaptiveTextStatus.phase}`}
+        data-testid="adaptive-text-status"
+        role="status"
+        aria-live="polite"
+      >
+        <span>Adaptive text</span>
+        <strong>{adaptiveTextStatus.message}</strong>
+        {adaptiveTextStatus.progress !== undefined ? (
+          <progress
+            max={100}
+            value={adaptiveTextStatus.progress}
+            aria-label="On-device model loading progress"
+          />
+        ) : null}
+      </div>
       <div ref={containerRef} className="tweakpane-host" />
       <button
         className="start-anew-button"

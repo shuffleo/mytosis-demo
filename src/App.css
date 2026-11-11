@@ -925,6 +925,39 @@
   gap: 8px;
 }
 
+.adaptive-text-status {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  color: #d8dfdb;
+  border: 1px solid rgba(211, 225, 217, 0.14);
+  background: rgba(19, 24, 21, 0.86);
+  font: 500 10px/1.3 Inter, ui-sans-serif, sans-serif;
+}
+
+.adaptive-text-status span {
+  color: #8f9c95;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.adaptive-text-status strong {
+  font-weight: 600;
+}
+
+.adaptive-text-status.is-fallback,
+.adaptive-text-status.is-error {
+  color: #f0c9bd;
+  border-color: rgba(234, 159, 136, 0.24);
+}
+
+.adaptive-text-status progress {
+  width: 100%;
+  height: 3px;
+  border: 0;
+  border-radius: 0;
+}
+
 .start-anew-button {
   display: grid;
   gap: 2px;

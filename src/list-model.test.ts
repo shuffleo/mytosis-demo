@@ -47,6 +47,27 @@ describe('shared-model bullet list', () => {
     validateDocument(document)
   })
 
+  it('always edits canonical M and invalidates derived variants after a list edit', () => {
+    const document = createDefaultDocument()
+    const cell = document.cells[0]
+    cell.textVariants = {
+      sourceHash: 'old',
+      status: 'ready',
+      values: { S: 'Short.', XS: 'Shorter.', XXS: 'Tiny.' },
+      provenance: 'on-device-model',
+      provider: 'test',
+      promptVersion: 'test',
+      generatedAtMs: 1,
+    }
+    const next = updateListCellText(document, cell.id, 'Canonical M changed')
+    expect(next.cells.find((candidate) => candidate.id === cell.id)?.text).toBe(
+      'Canonical M changed',
+    )
+    expect(
+      next.cells.find((candidate) => candidate.id === cell.id)?.textVariants,
+    ).toBeUndefined()
+  })
+
   it('round-trips list order and repairs invalid sites before microscope return', () => {
     const document = createDefaultDocument()
     document.layout.listOrder.reverse()

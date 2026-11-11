@@ -46,6 +46,13 @@ import {
   proximityExcitement,
   splitJitterState,
 } from './interaction-effects'
+import {
+  canonicalTextHash,
+  selectFittedTextVariant,
+  textVariantsForDisplay,
+  type AdaptiveTextLevel,
+  type AdaptiveTextVariantMetadata,
+} from './adaptive-text'
 
 export type CanvasMode = 'add' | 'select' | 'group' | 'merge'
 export type EditPresentation = 'focused' | 'inline'
@@ -72,6 +79,7 @@ interface CellVisual {
   pendingLineBreakFrames: number
   textLayoutEngine: 'pretext' | 'fallback'
   textEffectScale: number
+  displayVariant: AdaptiveTextLevel
 }
 
 interface GroupVisual {
@@ -255,6 +263,7 @@ export interface EngineCallbacks {
   onCanvasChanged?: (field: CanvasFieldBounds, animated: boolean) => void
   onHistoryChanged?: (canUndo: boolean, canRedo: boolean) => void
   onWallFrame?: (snapshot: WallRenderSnapshot) => void
+  onCanonicalTextChanged?: (cellId: string, text: string) => void
 }
 
 export interface CanvasFieldBounds {
@@ -302,7 +311,15 @@ export interface VoronoiDebugSnapshot {
     string,
     { blur: number; scale: number; opacity: number; visible: boolean; incubationState: string }
   >
-  textLayouts: Record<string, { engine: 'pretext' | 'fallback'; lineCount: number }>
+  textLayouts: Record<
+    string,
+    {
+      engine: 'pretext' | 'fallback'
+      lineCount: number
+      variant: AdaptiveTextLevel
+      content: string
+    }
+  >
   stickyBridges: number
   mergeCandidateId: string | null
   interactionEffects: Record<string, InteractionVisualEffect>
@@ -566,6 +583,20 @@ export class VoronoiCanvasEngine {
       this.sourceDirtyToken += 1
       this.scope.view.requestUpdate()
     }
+  }
+
+  setTextVariants(
+    cellId: string,
+    sourceHash: string,
+    metadata: AdaptiveTextVariantMetadata | undefined,
+  ) {
+    const cell = this.findCell(cellId)
+    if (!cell || canonicalTextHash(cell.text) !== sourceHash) return false
+    if (metadata) cell.textVariants = structuredClone(metadata)
+    else delete cell.textVariants
+    this.sourceDirtyToken += 1
+    if (!this.suspended) this.scope.view.requestUpdate()
+    return true
   }
 
   replaceDocument(serialized: string, command = 'list-edit') {
@@ -844,6 +875,7 @@ export class VoronoiCanvasEngine {
       const changed = nextText !== cell.text
       if (changed) this.checkpoint('text-edit')
       cell.text = nextText
+      if (changed) delete cell.textVariants
       if (changed || cell.contentProvenance.operation !== 'manual') {
         cell.contentProvenance = {
           provider: reflectiveContentProvider.id,
@@ -858,6 +890,7 @@ export class VoronoiCanvasEngine {
         ? { state: 'revealed', sourceIds: [] }
         : { state: 'empty', sourceIds: [], restStartedAtMs: this.lastFrameTime * 1000 }
       if (!cell.text) enforceSingleEmptyCell(this.model, cell.id)
+      if (changed) this.callbacks.onCanonicalTextChanged?.(cell.id, cell.text)
     }
     this.state.editingId = null
     this.editingDraftText = null
@@ -1101,6 +1134,8 @@ export class VoronoiCanvasEngine {
           {
             engine: visual.textLayoutEngine,
             lineCount: visual.lineLabels.length,
+            variant: visual.displayVariant,
+            content: visual.lineLabels.map((line) => line.content).join(' '),
           },
         ]),
       ),
@@ -1258,8 +1293,22 @@ export class VoronoiCanvasEngine {
       : cell.text
   }
 
+  private minimumDisplayTextForCell(cell: CellEntity | PreviewCell) {
+    const canonical = this.displayTextForCell(cell)
+    if (
+      !this.settings.adaptiveText.enabled ||
+      this.state.editingId === cell.id ||
+      cell.kind === 'seed' ||
+      'preview' in cell ||
+      cell.textVariants?.sourceHash !== canonicalTextHash(canonical)
+    ) {
+      return canonical
+    }
+    return textVariantsForDisplay(canonical, cell.textVariants).XXS
+  }
+
   private currentTextWeightFloor(cell: CellEntity) {
-    const text = this.displayTextForCell(cell)
+    const text = this.minimumDisplayTextForCell(cell)
     if (!text.trim()) return 0
     const requirement = measureTextRequirement(
       text,
@@ -2037,6 +2086,7 @@ export class VoronoiCanvasEngine {
     }
     this.seedRuntime.delete(cell.id)
     this.selectCell(cell.id)
+    this.callbacks.onCanonicalTextChanged?.(cell.id, cell.text)
   }
 
   private mergeCells(sourceId: string, targetId: string) {
@@ -2148,6 +2198,7 @@ export class VoronoiCanvasEngine {
     this.state.hoveredId = null
     this.notifySelectionChanged()
     this.sourceDirtyToken += 1
+    this.callbacks.onCanonicalTextChanged?.(merged.id, merged.text)
   }
 
   private splitCell(cellId: string) {
@@ -2250,6 +2301,9 @@ export class VoronoiCanvasEngine {
     this.notifySelectionChanged()
     this.state.gesture = null
     this.sourceDirtyToken += 1
+    for (const createdCell of created) {
+      this.callbacks.onCanonicalTextChanged?.(createdCell.id, createdCell.text)
+    }
   }
 
   private spawnSeed(time: number) {
@@ -2605,6 +2659,7 @@ export class VoronoiCanvasEngine {
         startedAtMs: timeMs,
         generatedText,
       }
+      this.callbacks.onCanonicalTextChanged?.(cell.id, cell.text)
     }
   }
 
@@ -3016,7 +3071,7 @@ export class VoronoiCanvasEngine {
       : this.model.cells
     const textRequirements = new Map<string, number>()
     const totalRequiredArea = this.model.cells.reduce((sum, cell) => {
-      const text = this.displayTextForCell(cell)
+      const text = this.minimumDisplayTextForCell(cell)
       if (!text || cell.kind === 'seed') return sum
       const required = measureTextRequirement(
         text,
@@ -3708,6 +3763,7 @@ export class VoronoiCanvasEngine {
       pendingLineBreakFrames: 0,
       textLayoutEngine: 'fallback',
       textEffectScale: 1,
+      displayVariant: 'M',
     }
     this.visuals.set(cell.id, visual)
     return visual
@@ -3773,15 +3829,41 @@ export class VoronoiCanvasEngine {
     const editingText = this.displayTextForCell(cell)
     const isEditingPlaceholder =
       this.state.editingId === cell.id && editingText.trim().length === 0
-    const displayText = isEditingPlaceholder
+    let displayText = isEditingPlaceholder
       ? reflectiveContentProvider.manualGhostPrompt(cell.creation.order)
       : editingText
-    const textLayout = layoutTextInPolygon(
-      displayText,
-      visual.currentPoints,
-      effectiveTextInset,
-      minimumFontSize,
-    )
+    let textLayout: WrappedTextLayout
+    const canUseAdaptiveVariant =
+      this.settings.adaptiveText.enabled &&
+      !isEditingPlaceholder &&
+      this.state.editingId !== cell.id &&
+      cell.kind === 'journal' &&
+      !('preview' in cell)
+    if (canUseAdaptiveVariant) {
+      const fitted = selectFittedTextVariant({
+        canonical: cell.text,
+        metadata: cell.textVariants,
+        polygon: visual.currentPoints,
+        safeInset: effectiveTextInset,
+        minimumFontSize: Math.max(
+          minimumFontSize,
+          this.settings.adaptiveText.fitMinimumFontSize,
+        ),
+        hysteresis: this.settings.adaptiveText.fitHysteresis,
+        previousLevel: visual.displayVariant,
+      })
+      displayText = fitted.text
+      textLayout = fitted.layout
+      visual.displayVariant = fitted.level
+    } else {
+      textLayout = layoutTextInPolygon(
+        displayText,
+        visual.currentPoints,
+        effectiveTextInset,
+        minimumFontSize,
+      )
+      visual.displayVariant = 'M'
+    }
     visual.textLayoutEngine = textLayout.engine
     const nextLineKey =
       cell.kind === 'seed'

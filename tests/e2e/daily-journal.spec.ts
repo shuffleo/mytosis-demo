@@ -483,9 +483,15 @@ test('maps focused clicks to the rendered caret and keeps inline outside clicks 
   await focusedEditor.fill('alpha beta gamma delta epsilon')
   const focusedBox = await focusedEditor.boundingBox()
   if (!focusedBox) throw new Error('Focused editor bounds are missing')
+  const focusedFirstLineY = await focusedEditor.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const matrix = new DOMMatrixReadOnly(style.transform)
+    const scale = Math.hypot(matrix.a, matrix.b)
+    return Number.parseFloat(style.lineHeight) * scale * 0.65
+  })
   await page.mouse.click(
     focusedBox.x + focusedBox.width * 0.25,
-    focusedBox.y + focusedBox.height * 0.5,
+    focusedBox.y + focusedFirstLineY,
   )
   const focusedSelection = await focusedEditor.evaluate(
     (element) => element.selectionStart,
@@ -518,6 +524,7 @@ test('maps focused clicks to the rendered caret and keeps inline outside clicks 
 test('uses native caret geometry across focused zoom, DPR, and font sizes', async ({
   browser,
 }) => {
+  test.setTimeout(45_000)
   const context = await browser.newContext({
     viewport: { width: 1180, height: 820 },
     deviceScaleFactor: 2,

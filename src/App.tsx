@@ -19,6 +19,15 @@ import { cloneSettings, defaultSettings } from './settings'
 import { ToolbarDock } from './ToolbarDock'
 import { VoronoiStage, type VoronoiStageHandle } from './VoronoiStage'
 import type { CanvasMode } from './voronoi-engine'
+import {
+  AdaptiveTextGenerationCoordinator,
+  BrowserWorkerTextVariantGenerator,
+  type AdaptiveTextRuntimeState,
+} from './adaptive-text-generator'
+import {
+  canonicalTextHash,
+  type AdaptiveTextVariantMetadata,
+} from './adaptive-text'
 import './App.css'
 
 function GearIcon() {
@@ -81,6 +90,11 @@ function App() {
   const [postProcessingStatus, setPostProcessingStatus] = useState<
     PostProcessStatus | 'checking'
   >('checking')
+  const [adaptiveTextStatus, setAdaptiveTextStatus] =
+    useState<AdaptiveTextRuntimeState>({
+      phase: 'idle',
+      message: 'Adaptive text idle',
+    })
   const [settings, setSettings] = useState(() =>
     cloneSettings(journalSession.document.settings ?? defaultSettings),
   )
@@ -88,6 +102,8 @@ function App() {
   const listDocumentRef = useRef(listDocument)
   const viewRef = useRef(view)
   const settingsRef = useRef(settings)
+  const adaptiveTextCoordinatorRef =
+    useRef<AdaptiveTextGenerationCoordinator | null>(null)
   const lastSavedRef = useRef(
     new Map<DayKey, string>([
       [journalSession.dayKey, serializeDocument(journalSession.document)],
@@ -133,6 +149,64 @@ function App() {
     },
     [journalSession, refreshContentDays],
   )
+  const applyAdaptiveTextMetadata = useCallback(
+    (
+      cellId: string,
+      sourceHash: string,
+      metadata: AdaptiveTextVariantMetadata | undefined,
+    ) => {
+      stageRef.current?.setTextVariants(cellId, sourceHash, metadata)
+      setListDocument((current) => {
+        if (!current) return current
+        const cell = current.cells.find((candidate) => candidate.id === cellId)
+        if (!cell || canonicalTextHash(cell.text) !== sourceHash) return current
+        const next = structuredClone(current)
+        const nextCell = next.cells.find((candidate) => candidate.id === cellId)
+        if (!nextCell) return current
+        if (metadata) nextCell.textVariants = structuredClone(metadata)
+        else delete nextCell.textVariants
+        return next
+      })
+    },
+    [],
+  )
+  useEffect(() => {
+    const coordinator = new AdaptiveTextGenerationCoordinator({
+        generator: new BrowserWorkerTextVariantGenerator(),
+        onMetadata: applyAdaptiveTextMetadata,
+        onRuntimeState: setAdaptiveTextStatus,
+      })
+    adaptiveTextCoordinatorRef.current = coordinator
+    return () => {
+      if (adaptiveTextCoordinatorRef.current === coordinator) {
+        adaptiveTextCoordinatorRef.current = null
+      }
+      coordinator.dispose()
+    }
+  }, [applyAdaptiveTextMetadata])
+  const scheduleAdaptiveText = useCallback(
+    (cellId: string, text: string) => {
+      adaptiveTextCoordinatorRef.current?.schedule(cellId, text, {
+        enabled: settingsRef.current.adaptiveText.enabled,
+        debounceMs: settingsRef.current.adaptiveText.debounceMs,
+      })
+    },
+    [],
+  )
+  const handleListDocumentChange = useCallback(
+    (document: VoronoiDocument) => {
+      const previous = listDocumentRef.current
+      setListDocument(document)
+      setListDirty(true)
+      for (const cell of document.cells) {
+        const previousText = previous?.cells.find(
+          (candidate) => candidate.id === cell.id,
+        )?.text
+        if (cell.text !== previousText) scheduleAdaptiveText(cell.id, cell.text)
+      }
+    },
+    [scheduleAdaptiveText],
+  )
   const updateSettings = (next: typeof settings) => {
     if (
       JSON.stringify(settingsRef.current.palette) !== JSON.stringify(next.palette)
@@ -176,6 +250,7 @@ function App() {
   }
   const selectDay = (nextDayKey: DayKey) => {
     if (nextDayKey === selectedDayKeyRef.current || transitionActive) return
+    adaptiveTextCoordinatorRef.current?.cancelAll()
     const previousDayKey = selectedDayKeyRef.current
     const currentDocument =
       viewRef.current === 'list'
@@ -235,6 +310,7 @@ function App() {
       return
     }
     clusterAbortRef.current?.abort()
+    adaptiveTextCoordinatorRef.current?.cancelAll()
     journalSession.store.clearAll()
     const nextDayKey = toLocalDayKey(new Date())
     const nextDocument = createDefaultDocument()
@@ -289,6 +365,11 @@ function App() {
     },
     [],
   )
+  useEffect(() => {
+    if (!settings.adaptiveText.enabled) {
+      adaptiveTextCoordinatorRef.current?.cancelAll()
+    }
+  }, [settings.adaptiveText.enabled])
   const switchViewWithTransition = (
     target: 'microscope' | 'list',
     atMidpoint: () => void,
@@ -432,15 +513,13 @@ function App() {
         onPostProcessingStatus={setPostProcessingStatus}
         onHistoryChanged={handleHistoryChanged}
         onModeChanged={setMode}
+        onCanonicalTextChanged={scheduleAdaptiveText}
         onSelectionChanged={(ids) => setSelectedCellIds([...ids])}
       />
       {view === 'list' && listDocument && (
         <ListEditor
           document={listDocument}
-          onChange={(document) => {
-            setListDocument(document)
-            setListDirty(true)
-          }}
+          onChange={handleListDocumentChange}
           onCommit={commitListDocument}
         />
       )}
@@ -504,6 +583,7 @@ function App() {
           <ControlPanel
             settings={settings}
             postProcessingStatus={postProcessingStatus}
+            adaptiveTextStatus={adaptiveTextStatus}
             onChange={updateSettings}
             onAddSeed={() => setSeedAuditRequest((request) => request + 1)}
             onDieSeed={() => stageRef.current?.dieFirstSeed()}

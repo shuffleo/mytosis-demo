@@ -9,8 +9,9 @@ import {
   reflectiveContentProvider,
   type ContentProvenance,
 } from './reflective-content'
+import type { AdaptiveTextVariantMetadata } from './adaptive-text'
 
-export const CANVAS_SCHEMA_VERSION = 4
+export const CANVAS_SCHEMA_VERSION = 5
 
 export type CellKind = 'journal' | 'seed'
 export type IncubationState = 'empty' | 'incubating' | 'revealed'
@@ -24,6 +25,7 @@ export interface NormalizedPoint {
 export interface CellEntity {
   id: string
   text: string
+  textVariants?: AdaptiveTextVariantMetadata
   site: NormalizedPoint
   weight: number
   kind: CellKind
@@ -278,6 +280,26 @@ export function validateDocument(document: VoronoiDocument) {
       )
     }
     assert(Boolean(cell.contentProvenance?.provider), `missing content provenance for ${cell.id}`)
+    if (cell.textVariants) {
+      assert(
+        typeof cell.textVariants.sourceHash === 'string',
+        `invalid text variant source hash for ${cell.id}`,
+      )
+      assert(
+        ['pending', 'loading', 'generating', 'ready', 'fallback', 'error'].includes(
+          cell.textVariants.status,
+        ),
+        `invalid text variant status for ${cell.id}`,
+      )
+      assert(
+        Boolean(
+          cell.textVariants.values?.S &&
+            cell.textVariants.values?.XS &&
+            cell.textVariants.values?.XXS,
+        ),
+        `missing text variants for ${cell.id}`,
+      )
+    }
     for (const sourceId of cell.incubation.sourceIds) {
       assert(cellIds.has(sourceId), `missing incubation source ${sourceId}`)
     }
@@ -419,6 +441,7 @@ export function migrateDocument(input: unknown): VoronoiDocument {
     version === 1 ||
       version === 2 ||
       version === 3 ||
+      version === 4 ||
       version === CANVAS_SCHEMA_VERSION,
     'unsupported schema version',
   )

@@ -163,6 +163,12 @@ export interface CanvasSettings {
     seed: number
     animationMs: number
   }
+  adaptiveText: {
+    enabled: boolean
+    debounceMs: number
+    fitMinimumFontSize: number
+    fitHysteresis: number
+  }
   palette: {
     cellLight: string
     cellMid: string
@@ -188,7 +194,7 @@ export interface CanvasSettings {
   }
 }
 
-export const SETTINGS_SCHEMA_VERSION = 15
+export const SETTINGS_SCHEMA_VERSION = 16
 
 const VERSION_13_FOCUS_VIGNETTE: VignetteSettings = {
   enabled: true,
@@ -372,6 +378,12 @@ export const defaultSettings: CanvasSettings = {
     maxK: 4,
     seed: 20261109,
     animationMs: 1400,
+  },
+  adaptiveText: {
+    enabled: true,
+    debounceMs: 650,
+    fitMinimumFontSize: 9.5,
+    fitHysteresis: 0.12,
   },
   palette: {
     cellLight: '#e7e8e6',
@@ -571,7 +583,7 @@ export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasS
   const sourceVersion = input?.schemaVersion ?? 0
   if (
     !input ||
-    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, SETTINGS_SCHEMA_VERSION].includes(
+    ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, SETTINGS_SCHEMA_VERSION].includes(
       sourceVersion,
     )
   ) {
@@ -614,6 +626,7 @@ export function migrateSettings(input?: Partial<CanvasSettings> | null): CanvasS
     viewTransition: { ...defaultSettings.viewTransition, ...input.viewTransition },
     editFocus: { ...defaultSettings.editFocus, ...input.editFocus },
     clustering: { ...defaultSettings.clustering, ...input.clustering },
+    adaptiveText: { ...defaultSettings.adaptiveText, ...input.adaptiveText },
     palette: { ...defaultSettings.palette, ...input.palette },
   }
 }

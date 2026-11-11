@@ -135,6 +135,12 @@ describe('refined control defaults', () => {
       seed: 20261109,
       animationMs: 1400,
     })
+    expect(defaultSettings.adaptiveText).toEqual({
+      enabled: true,
+      debounceMs: 650,
+      fitMinimumFontSize: 9.5,
+      fitHysteresis: 0.12,
+    })
     expect(defaultSettings.viewTransition).toEqual({
       enabled: true,
       durationMs: 900,
@@ -407,6 +413,16 @@ describe('refined control defaults', () => {
       ghostResponse: 12,
       cueEasing: 'smooth',
     })
+  })
+
+  it('adds adaptive text controls to version-fifteen settings', () => {
+    const legacy = structuredClone(defaultSettings)
+    legacy.schemaVersion = 15
+    delete (legacy as Partial<typeof legacy>).adaptiveText
+
+    const migrated = migrateSettings(legacy)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.adaptiveText).toEqual(defaultSettings.adaptiveText)
   })
 
   it('keeps cell text WCAG AA readable in every microscope palette', () => {
