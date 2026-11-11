@@ -2051,8 +2051,8 @@ test('New Select delays sticky merge, uses explicit split, and keeps both revers
   expect(stickyState.stickyBridges).toBeLessThanOrEqual(4)
   expect(polygonArea(stickyState.cells['cell-2'])).toBeGreaterThan(targetAreaBefore * 0.25)
   expect(stickyState.interactionEffects['cell-1']?.cellJitterPx).toBeGreaterThan(0)
-  expect(stickyState.interactionEffects['cell-1']?.cellJitterPx).toBeLessThanOrEqual(
-    activeZoneState.interactionEffects['cell-1']?.cellJitterPx ?? Number.POSITIVE_INFINITY,
+  expect(stickyState.interactionEffects['cell-1']?.phaseStartedAt).toBe(
+    stickyState.interactionEffects['cell-2']?.phaseStartedAt,
   )
   await page.mouse.up()
   await expect.poll(async () => (await snapshot(page)).cellCount).toBe(11)
@@ -2189,11 +2189,13 @@ test('merges and splits members without escaping their hierarchical group', asyn
   expect(merged?.groupId).toBe(groupId)
   expect(state.model.groups[0].memberIds).toContain(merged?.id)
 
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.waitForTimeout(240)
   const splitPoint = await sitePoint(page, merged?.id ?? '')
-  await page.mouse.move(splitPoint.x, splitPoint.y)
-  await page.mouse.down()
-  await page.waitForTimeout(850)
-  await page.mouse.up()
+  await page.mouse.click(splitPoint.x, splitPoint.y)
+  await expect(page.getByTestId('selected-cell-actions')).toBeVisible()
+  await page.getByRole('button', { name: 'Split', exact: true }).click()
+  await page.getByRole('menuitem', { name: /^2 cells/ }).click()
   await expect.poll(async () => (await snapshot(page)).cellCount).toBeGreaterThan(11)
   await page.waitForTimeout(1200)
   state = await snapshot(page)

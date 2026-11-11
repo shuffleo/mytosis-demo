@@ -201,7 +201,7 @@ export function DateRail({
         { transform: 'translateX(0)' },
       ],
       {
-        duration: 360 + Math.min(180, Math.abs(delta) * 24),
+        duration: 600 + Math.min(180, Math.abs(delta) * 24),
         easing: 'cubic-bezier(.22,.61,.36,1)',
       },
     )

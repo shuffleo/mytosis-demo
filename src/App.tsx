@@ -513,7 +513,12 @@ function App() {
         controller.signal,
         updateProgress,
       )
-      const minimumCancellableWindow = 450
+      // Keep cancellation reachable through the visual-settling phase even
+      // when local clustering finishes before the controls have rendered.
+      const minimumCancellableWindow = Math.min(
+        3000,
+        Math.max(2200, settings.clustering.animationMs),
+      )
       await abortableDelay(
         Math.max(0, minimumCancellableWindow - (performance.now() - startedAt)),
         controller.signal,
