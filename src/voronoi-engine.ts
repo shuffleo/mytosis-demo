@@ -40,6 +40,8 @@ import {
 } from './text-layout'
 import {
   easeInteraction,
+  groupCuePhase,
+  groupCueStrength,
   mergeVibrationState,
   proximityExcitement,
   splitJitterState,
@@ -103,6 +105,7 @@ interface MoveGesture {
   attachCandidateSince: number | null
   attachCandidatePosition: Point2 | null
   attachArmedGroupId: string | null
+  oscillatorStartedAt: number
   historyCaptured: boolean
   mergeIntent?: MergeIntent
 }
@@ -124,6 +127,8 @@ interface GroupMemberGesture {
   offset: Point2
   origin: Point2
   pendingDetach: boolean
+  detachCandidateSince: number | null
+  oscillatorStartedAt: number
   historyCaptured: boolean
   mergeIntent?: MergeIntent
 }
@@ -172,6 +177,7 @@ interface InteractionState {
   mode: CanvasMode
   hoveredId: string | null
   selectedCellId: string | null
+  selectedCellIds: string[]
   selectedGroupId: string | null
   editingId: string | null
   acquiringGroupId: string | null
@@ -183,8 +189,26 @@ interface InteractionVisualEffect {
   cellJitterPx: number
   wallJitterPx: number
   frequencyHz: number
+  phaseStartedAt: number
+  phaseOffset: number
   tint: number
   grainBoost: number
+}
+
+interface ActiveGroupCue {
+  kind: 'join' | 'detach'
+  cellId: string
+  groupId: string
+  strength: number
+  oscillatorStartedAt: number
+  ghostSite: Point2
+}
+
+interface GroupGhostSlot {
+  kind: 'join' | 'detach'
+  groupId: string
+  site: Point2
+  strength: number
 }
 
 interface ItemData {
@@ -223,7 +247,10 @@ export interface EngineCallbacks {
   onEditorLayout: (layout: EditorLayout) => void
   onEditorPointer: (point: Point2) => void
   onInlineEditingFinished: () => void
-  onSelectionChanged: (selection: string | null) => void
+  onSelectionChanged: (
+    selection: string | null,
+    selectedCellIds: readonly string[],
+  ) => void
   onModeChanged?: (mode: CanvasMode) => void
   onCanvasChanged?: (field: CanvasFieldBounds, animated: boolean) => void
   onHistoryChanged?: (canUndo: boolean, canRedo: boolean) => void
@@ -243,7 +270,7 @@ export interface WallRenderSnapshot {
   height: number
   field: { center: Point2; radius: number }
   cells: Array<{ id: string; points: Point2[]; grainBoost: number }>
-  groups: Array<{ id: string; points: Point2[]; color: string }>
+  groups: Array<{ id: string; points: Point2[]; color: string; strokeBoost: number }>
 }
 
 export interface VoronoiDebugSnapshot {
@@ -252,6 +279,7 @@ export interface VoronoiDebugSnapshot {
   previewId: string | null
   hoveredId: string | null
   selectedId: string | null
+  selectedIds: string[]
   selectedGroupId: string | null
   editingId: string | null
   editingCaretIndex: number
@@ -260,6 +288,7 @@ export interface VoronoiDebugSnapshot {
   cells: Record<string, Point2[]>
   handles: Point2[]
   groupWalls: Record<string, Point2[]>
+  groupWallEffects: Record<string, { strokeWidth: number }>
   breathScales: Record<string, { cell: number; text: number }>
   seedProgress: Record<string, number>
   incubationProgress: Record<string, number>
@@ -277,6 +306,7 @@ export interface VoronoiDebugSnapshot {
   stickyBridges: number
   mergeCandidateId: string | null
   interactionEffects: Record<string, InteractionVisualEffect>
+  groupCue: (ActiveGroupCue & { ghostStrength: number }) | null
   history: { undoDepth: number; redoDepth: number }
   gesture: {
     kind: string
@@ -312,6 +342,37 @@ const HANDLE_DIRECTIONS: Point2[] = [
 
 function distance(first: Point2, second: Point2) {
   return Math.hypot(second.x - first.x, second.y - first.y)
+}
+
+function nearestPointOnPolygon(point: Point2, polygon: readonly Point2[]) {
+  let nearest = polygon[0] ?? point
+  let nearestDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index]
+    const end = polygon[(index + 1) % polygon.length]
+    const dx = end.x - start.x
+    const dy = end.y - start.y
+    const lengthSquared = dx * dx + dy * dy
+    const projection =
+      lengthSquared > 0
+        ? clamp(
+            ((point.x - start.x) * dx + (point.y - start.y) * dy) /
+              lengthSquared,
+            0,
+            1,
+          )
+        : 0
+    const candidate = {
+      x: start.x + dx * projection,
+      y: start.y + dy * projection,
+    }
+    const candidateDistance = distance(point, candidate)
+    if (candidateDistance < nearestDistance) {
+      nearest = candidate
+      nearestDistance = candidateDistance
+    }
+  }
+  return { point: { ...nearest }, distance: nearestDistance }
 }
 
 function smoothstep(value: number) {
@@ -354,6 +415,8 @@ export class VoronoiCanvasEngine {
   private readonly groupTextFloors = new Map<string, GroupTextFloor>()
   private readonly textWeightBoost = new Map<string, number>()
   private readonly interactionEffects = new Map<string, InteractionVisualEffect>()
+  private activeGroupCue: ActiveGroupCue | null = null
+  private groupGhostSlot: GroupGhostSlot | null = null
   private readonly textRequirementState = new Map<
     string,
     { requiredArea: number; actualArea: number; fits: boolean }
@@ -364,6 +427,7 @@ export class VoronoiCanvasEngine {
     mode: 'add',
     hoveredId: null,
     selectedCellId: null,
+    selectedCellIds: [],
     selectedGroupId: null,
     editingId: null,
     acquiringGroupId: null,
@@ -609,6 +673,29 @@ export class VoronoiCanvasEngine {
     this.clearSelection()
     this.sourceDirtyToken += 1
     this.notifyHistoryChanged()
+    return true
+  }
+
+  groupSelectedCells() {
+    const cells = this.state.selectedCellIds
+      .map((id) => this.findCell(id))
+      .filter(
+        (cell): cell is CellEntity =>
+          Boolean(cell && cell.kind === 'journal' && !cell.groupId),
+      )
+    if (cells.length < 2 || this.model.groups.length >= 8) return false
+    this.checkpoint('group-selection')
+    const group = this.createManualGroup(cells[0])
+    if (!group) {
+      this.history.discardLastCheckpoint()
+      return false
+    }
+    for (const cell of cells) this.attachCellToGroup(cell, group)
+    this.state.acquiringGroupId = null
+    this.clearSelection()
+    this.sourceDirtyToken += 1
+    this.notifyHistoryChanged()
+    this.updateCanvasState()
     return true
   }
 
@@ -923,6 +1010,7 @@ export class VoronoiCanvasEngine {
       previewId: this.state.preview?.id ?? null,
       hoveredId: this.state.hoveredId,
       selectedId: this.state.selectedCellId,
+      selectedIds: [...this.state.selectedCellIds],
       selectedGroupId: this.state.selectedGroupId,
       editingId: this.state.editingId,
       editingCaretIndex: this.editingSelectionIndex,
@@ -938,6 +1026,12 @@ export class VoronoiCanvasEngine {
         [...this.groupVisuals.entries()].map(([id, visual]) => [
           id,
           visual.currentPoints.map((point) => ({ ...point })),
+        ]),
+      ),
+      groupWallEffects: Object.fromEntries(
+        [...this.groupVisuals.entries()].map(([id, visual]) => [
+          id,
+          { strokeWidth: visual.path.strokeWidth },
         ]),
       ),
       breathScales: Object.fromEntries(
@@ -1023,6 +1117,13 @@ export class VoronoiCanvasEngine {
           { ...effect },
         ]),
       ),
+      groupCue: this.activeGroupCue
+        ? {
+            ...this.activeGroupCue,
+            ghostSite: { ...this.activeGroupCue.ghostSite },
+            ghostStrength: this.groupGhostSlot?.strength ?? 0,
+          }
+        : null,
       history: this.history.depths,
       gesture: this.state.gesture
         ? {
@@ -1320,6 +1421,13 @@ export class VoronoiCanvasEngine {
       return
     }
 
+    if (event.modifiers.shift && !hitCell.groupId) {
+      this.toggleCellSelection(hitCell.id)
+      this.state.gesture = null
+      this.updateCanvasState()
+      return
+    }
+
     if (hit.kind === 'handle' && hit.direction) {
       this.selectCell(hitCell.id)
       const visual = this.visuals.get(hitCell.id)
@@ -1345,6 +1453,8 @@ export class VoronoiCanvasEngine {
         offset: { x: point.x - pixel.x, y: point.y - pixel.y },
         origin: { ...hitCell.site },
         pendingDetach: false,
+        detachCandidateSince: null,
+        oscillatorStartedAt: this.lastFrameTime,
         historyCaptured: false,
         mergeIntent: this.makeNewSelectMergeIntent(hitCell),
       }
@@ -1360,6 +1470,7 @@ export class VoronoiCanvasEngine {
         attachCandidateSince: null,
         attachCandidatePosition: null,
         attachArmedGroupId: null,
+        oscillatorStartedAt: this.lastFrameTime,
         historyCaptured: false,
         mergeIntent: this.makeNewSelectMergeIntent(hitCell),
       }
@@ -1487,20 +1598,11 @@ export class VoronoiCanvasEngine {
     if (gesture.kind === 'group-member') {
       const group = this.model.groups.find((candidate) => candidate.id === gesture.groupId)
       if (!group) return
+      this.updateGroupDetachDwell(this.lastFrameTime * 1000)
       const otherMembers = group.memberIds
         .filter((id) => id !== cell.id)
         .map((id) => this.findCell(id))
         .filter((candidate): candidate is CellEntity => Boolean(candidate))
-      const centroid = otherMembers.reduce(
-        (sum, member) => ({
-          x: sum.x + member.site.x / Math.max(1, otherMembers.length),
-          y: sum.y + member.site.y / Math.max(1, otherMembers.length),
-        }),
-        { x: 0, y: 0 },
-      )
-      gesture.pendingDetach =
-        distance(cell.site, centroid) > this.settings.group.detachThreshold
-
       const nearest = otherMembers
         .map((member) => ({ member, distance: distance(member.site, cell.site) }))
         .sort((first, second) => first.distance - second.distance)[0]
@@ -1615,6 +1717,53 @@ export class VoronoiCanvasEngine {
       )[0]?.id ?? null
   }
 
+  private projectedGroupGhostSite(groupId: string, point: Point2) {
+    const boundary =
+      this.groupInnerPolygons.get(groupId) ??
+      this.groupVisuals.get(groupId)?.currentPoints ??
+      this.groupContainerPolygons.get(groupId)
+    if (!boundary?.length) return this.normalizedFromPixel(point)
+    const nearest = nearestPointOnPolygon(point, boundary).point
+    const center = polygonCentroid(boundary)
+    const dx = center.x - nearest.x
+    const dy = center.y - nearest.y
+    const magnitude = Math.hypot(dx, dy) || 1
+    const inset = Math.min(
+      this.settings.group.ghostSizePx * 0.45,
+      Math.max(2, distance(nearest, center) * 0.45),
+    )
+    return this.normalizedFromPixel({
+      x: nearest.x + (dx / magnitude) * inset,
+      y: nearest.y + (dy / magnitude) * inset,
+    })
+  }
+
+  private detachCueGeometry(cell: CellEntity, groupId: string) {
+    const boundary =
+      this.groupVisuals.get(groupId)?.currentPoints ??
+      this.groupContainerPolygons.get(groupId)
+    if (!boundary?.length) {
+      return {
+        pullProgress: 0,
+        ready: false,
+        ghostSite: { ...cell.site },
+      }
+    }
+    const point = this.pixelFromSite(cell.site)
+    const center = polygonCentroid(boundary)
+    const nearest = nearestPointOnPolygon(point, boundary)
+    const outsideDistance = pointInPolygon(point, boundary) ? 0 : nearest.distance
+    const boundaryRadius = distance(center, nearest.point)
+    const detachRadius = this.settings.group.detachThreshold * this.fieldRadius
+    const centerDistance = distance(center, point)
+    const pullSpan = Math.max(detachRadius - boundaryRadius, 1)
+    return {
+      pullProgress: clamp(outsideDistance / pullSpan, 0, 1),
+      ready: centerDistance >= detachRadius,
+      ghostSite: this.projectedGroupGhostSite(groupId, point),
+    }
+  }
+
   private updateGroupAttachDwell(nowMs: number) {
     const gesture = this.state.gesture
     if (
@@ -1642,6 +1791,26 @@ export class VoronoiCanvasEngine {
     group.container.site.x += (cell.site.x - group.container.site.x) * 0.04
     group.container.site.y += (cell.site.y - group.container.site.y) * 0.04
     group.container.weight = Math.min(0.24, group.container.weight + 0.0015)
+  }
+
+  private updateGroupDetachDwell(nowMs: number) {
+    const gesture = this.state.gesture
+    if (gesture?.kind !== 'group-member') return
+    const cell = this.findCell(gesture.cellId)
+    if (!cell) return
+    const detach = this.detachCueGeometry(cell, gesture.groupId)
+    if (detach.pullProgress > 0) {
+      gesture.detachCandidateSince ??= nowMs
+    } else {
+      gesture.detachCandidateSince = null
+    }
+    const dwellElapsed =
+      gesture.detachCandidateSince === null
+        ? 0
+        : nowMs - gesture.detachCandidateSince
+    gesture.pendingDetach =
+      detach.ready &&
+      dwellElapsed >= this.settings.group.attachHoldMs
   }
 
   private placeEmptyCell(point: Point2, command: string) {
@@ -1747,40 +1916,48 @@ export class VoronoiCanvasEngine {
       ? this.model.groups.find((candidate) => candidate.id === this.state.acquiringGroupId)
       : undefined
     if (!group) {
-      if (this.model.groups.length >= 8) return
-      const id = `group-${this.model.layout.nextGroupNumber}`
-      const order = this.model.layout.nextGroupNumber
-      const normalizedWallPadding =
-        (this.settings.group.wallThickness +
-          this.settings.group.wallGap +
-          this.settings.geometry.seamGap) /
-        Math.max(1, this.fieldRadius)
-      const preferredWeight =
-        cell.weight + Math.max(0.014, normalizedWallPadding * 0.4)
-      group = {
-        id,
-        memberIds: [],
-        wall: {
-          gap: this.settings.group.wallGap,
-          thickness: this.settings.group.wallThickness,
-        },
-        style: { tint: groupColorFor(this.settings, order) },
-        container: {
-          site: { ...cell.site },
-          weight: Math.max(0.022, preferredWeight),
-          preferredWeight: Math.max(0.022, preferredWeight),
-        },
-        title: reflectiveContentProvider.groupTitle([{ id: cell.id, text: cell.text }]).text,
-        provenance: { source: 'manual' },
-        order,
-      }
-      this.model.layout.nextGroupNumber += 1
-      this.model.groups.push(group)
-      this.state.acquiringGroupId = id
+      group = this.createManualGroup(cell) ?? undefined
+      if (!group) return
+      this.state.acquiringGroupId = group.id
     }
     this.attachCellToGroup(cell, group)
     this.selectGroup(group.id)
     this.updateCanvasState()
+  }
+
+  private createManualGroup(cell: CellEntity) {
+    if (this.model.groups.length >= 8) return null
+    const id = `group-${this.model.layout.nextGroupNumber}`
+    const order = this.model.layout.nextGroupNumber
+    const normalizedWallPadding =
+      (this.settings.group.wallThickness +
+        this.settings.group.wallGap +
+        this.settings.geometry.seamGap) /
+      Math.max(1, this.fieldRadius)
+    const preferredWeight =
+      cell.weight + Math.max(0.014, normalizedWallPadding * 0.4)
+    const group: GroupEntity = {
+      id,
+      memberIds: [],
+      wall: {
+        gap: this.settings.group.wallGap,
+        thickness: this.settings.group.wallThickness,
+      },
+      style: { tint: groupColorFor(this.settings, order) },
+      container: {
+        site: { ...cell.site },
+        weight: Math.max(0.022, preferredWeight),
+        preferredWeight: Math.max(0.022, preferredWeight),
+      },
+      title: reflectiveContentProvider.groupTitle([
+        { id: cell.id, text: cell.text },
+      ]).text,
+      provenance: { source: 'manual' },
+      order,
+    }
+    this.model.layout.nextGroupNumber += 1
+    this.model.groups.push(group)
+    return group
   }
 
   private attachCellToGroup(cell: CellEntity, group: GroupEntity) {
@@ -1966,9 +2143,10 @@ export class VoronoiCanvasEngine {
       )
     }
     this.state.selectedCellId = id
+    this.state.selectedCellIds = [id]
     this.state.selectedGroupId = null
     this.state.hoveredId = null
-    this.callbacks.onSelectionChanged(id)
+    this.notifySelectionChanged()
     this.sourceDirtyToken += 1
   }
 
@@ -2065,8 +2243,11 @@ export class VoronoiCanvasEngine {
     )
     this.model.layout.nextCellNumber += created.length
     this.state.selectedCellId = created[0]?.id ?? null
+    this.state.selectedCellIds = this.state.selectedCellId
+      ? [this.state.selectedCellId]
+      : []
     this.state.hoveredId = null
-    this.callbacks.onSelectionChanged(this.state.selectedCellId)
+    this.notifySelectionChanged()
     this.state.gesture = null
     this.sourceDirtyToken += 1
   }
@@ -2077,7 +2258,7 @@ export class VoronoiCanvasEngine {
     const candidates = this.model.cells.filter(
       (cell) => cell.kind === 'journal' && !cell.groupId,
     )
-    const triples = findDelaunayTriples(
+    const allTriples = findDelaunayTriples(
       candidates.map((cell) => ({ id: cell.id, x: cell.site.x, y: cell.site.y })),
     ).filter((triple) => {
       const distanceFromCenter = Math.hypot(triple.circumcenter.x, triple.circumcenter.y)
@@ -2086,6 +2267,14 @@ export class VoronoiCanvasEngine {
       )
       return distanceFromCenter < 0.88 && triple.radius < 0.62 && notCrowded
     })
+    const selected = new Set(this.state.selectedCellIds)
+    const selectedSeams =
+      selected.size > 1
+        ? allTriples.filter(
+            (triple) => triple.ids.filter((id) => selected.has(id)).length >= 2,
+          )
+        : []
+    const triples = selectedSeams.length > 0 ? selectedSeams : allTriples
     if (triples.length === 0) return false
     const triple = triples[Math.floor(this.random() * triples.length) % triples.length]
     const sources = triple.ids
@@ -2363,7 +2552,7 @@ export class VoronoiCanvasEngine {
         continue
       }
       const active =
-        this.state.selectedCellId === cell.id ||
+        this.state.selectedCellIds.includes(cell.id) ||
         this.state.hoveredId === cell.id ||
         this.state.editingId === cell.id ||
         (this.state.gesture &&
@@ -2552,6 +2741,8 @@ export class VoronoiCanvasEngine {
       cellJitterPx: 0,
       wallJitterPx: 0,
       frequencyHz: 0,
+      phaseStartedAt: 0,
+      phaseOffset: 0,
       tint: 0,
       grainBoost: 1,
     }
@@ -2559,17 +2750,123 @@ export class VoronoiCanvasEngine {
       cellJitterPx: Math.max(current.cellJitterPx, patch.cellJitterPx ?? 0),
       wallJitterPx: Math.max(current.wallJitterPx, patch.wallJitterPx ?? 0),
       frequencyHz: Math.max(current.frequencyHz, patch.frequencyHz ?? 0),
+      phaseStartedAt: patch.phaseStartedAt ?? current.phaseStartedAt,
+      phaseOffset: patch.phaseOffset ?? current.phaseOffset,
       tint: Math.max(current.tint, patch.tint ?? 0),
       grainBoost: Math.max(current.grainBoost, patch.grainBoost ?? 1),
     })
   }
 
+  private deriveActiveGroupCue(
+    time: number,
+    source: CellEntity,
+    gesture: MoveGesture | GroupMemberGesture,
+  ): ActiveGroupCue | null {
+    if (gesture.kind === 'move') {
+      const groupId = gesture.attachCandidateGroupId ?? gesture.pendingAttachGroupId
+      if (!groupId) return null
+      const boundary =
+        this.groupVisuals.get(groupId)?.currentPoints ??
+        this.groupContainerPolygons.get(groupId)
+      if (!boundary?.length) return null
+      const point = this.pixelFromSite(source.site)
+      const nearest = nearestPointOnPolygon(point, boundary)
+      const threshold = Math.max(1, this.settings.group.attachDistancePx)
+      const spatialProgress = pointInPolygon(point, boundary)
+        ? 0.7 + clamp(nearest.distance / threshold, 0, 1) * 0.3
+        : clamp(1 - nearest.distance / threshold, 0, 1)
+      const dwellElapsedMs =
+        gesture.attachCandidateSince === null
+          ? 0
+          : Math.max(0, time * 1000 - gesture.attachCandidateSince)
+      return {
+        kind: 'join',
+        cellId: source.id,
+        groupId,
+        strength: groupCueStrength({
+          spatialProgress,
+          dwellElapsedMs,
+          dwellMs: this.settings.group.attachHoldMs,
+          easing: this.settings.group.cueEasing,
+        }),
+        oscillatorStartedAt: gesture.oscillatorStartedAt,
+        ghostSite: this.projectedGroupGhostSite(groupId, point),
+      }
+    }
+
+    const detach = this.detachCueGeometry(source, gesture.groupId)
+    if (detach.pullProgress <= 0) return null
+    const dwellElapsedMs =
+      gesture.detachCandidateSince === null
+        ? 0
+        : Math.max(0, time * 1000 - gesture.detachCandidateSince)
+    return {
+      kind: 'detach',
+      cellId: source.id,
+      groupId: gesture.groupId,
+      strength: groupCueStrength({
+        spatialProgress: detach.pullProgress,
+        dwellElapsedMs,
+        dwellMs: this.settings.group.attachHoldMs,
+        easing: this.settings.group.cueEasing,
+      }),
+      oscillatorStartedAt: gesture.oscillatorStartedAt,
+      ghostSite: detach.ghostSite,
+    }
+  }
+
+  private updateGroupGhostSlot(delta: number) {
+    const cue = this.activeGroupCue
+    if (
+      cue &&
+      (!this.groupGhostSlot ||
+        this.groupGhostSlot.groupId !== cue.groupId ||
+        this.groupGhostSlot.kind !== cue.kind)
+    ) {
+      this.groupGhostSlot = {
+        kind: cue.kind,
+        groupId: cue.groupId,
+        site: { ...cue.ghostSite },
+        strength: 0,
+      }
+    }
+    const ghost = this.groupGhostSlot
+    if (!ghost) return
+    const response = this.reducedMotion
+      ? 1
+      : 1 - Math.exp(-Math.max(1, this.settings.group.ghostResponse) * delta)
+    const targetStrength = cue?.groupId === ghost.groupId ? cue.strength : 0
+    const targetSite = cue?.groupId === ghost.groupId ? cue.ghostSite : ghost.site
+    ghost.site.x += (targetSite.x - ghost.site.x) * response
+    ghost.site.y += (targetSite.y - ghost.site.y) * response
+    ghost.strength += (targetStrength - ghost.strength) * response
+    if (!cue && ghost.strength < 0.002) this.groupGhostSlot = null
+  }
+
   private updateInteractionEffects(time: number) {
     this.interactionEffects.clear()
+    this.activeGroupCue = null
     const gesture = this.state.gesture
     if (!gesture || !('cellId' in gesture)) return
     const source = this.findCell(gesture.cellId)
     if (!source) return
+    if (gesture.kind === 'move' || gesture.kind === 'group-member') {
+      const groupCue = this.deriveActiveGroupCue(time, source, gesture)
+      if (groupCue) {
+        this.activeGroupCue = groupCue
+        this.setInteractionEffect(source.id, {
+          cellJitterPx:
+            this.reducedMotion
+              ? 0
+              : this.settings.group.cueCellAmplitudePx * groupCue.strength,
+          frequencyHz: this.settings.group.cueFrequencyHz,
+          phaseStartedAt: groupCue.oscillatorStartedAt,
+          phaseOffset: 0,
+          tint: groupCue.strength * 0.24,
+          grainBoost: 1 + groupCue.strength * 0.4,
+        })
+      }
+    }
     const intent = this.mergeIntentFor(gesture)
     const splitStartedAt = gesture.kind === 'merge' ? gesture.startedAt : intent?.startedAt
     const splitMoved = gesture.kind === 'merge' ? gesture.moved : intent?.moved
@@ -2659,7 +2956,19 @@ export class VoronoiCanvasEngine {
       return points.map((point) => ({ ...point }))
     }
     const center = polygonCentroid(points)
-    const phase = time * Math.PI * 2 * Math.max(0.01, effect.frequencyHz)
+    const groupCue =
+      this.activeGroupCue?.cellId === cellId ? this.activeGroupCue : null
+    const phase = groupCue
+      ? groupCuePhase(
+          time - groupCue.oscillatorStartedAt,
+          this.settings.group.cueFrequencyHz,
+          0,
+        )
+      : groupCuePhase(
+          time - effect.phaseStartedAt,
+          effect.frequencyHz,
+          effect.phaseOffset,
+        )
     const translation = {
       x: Math.sin(phase) * effect.cellJitterPx,
       y: Math.cos(phase * 0.93) * effect.cellJitterPx * 0.72,
@@ -2688,8 +2997,10 @@ export class VoronoiCanvasEngine {
     this.lastFrameTime = time
     this.updateFieldBounds()
     this.updateMergeLongPress(time)
-    this.updateInteractionEffects(time)
     this.updateGroupAttachDwell(time * 1000)
+    this.updateGroupDetachDwell(time * 1000)
+    this.updateInteractionEffects(time)
+    this.updateGroupGhostSlot(delta)
     this.applyGroupAttraction(delta)
     this.updateIncubation(time * 1000)
     const expiryNowMs = Date.now()
@@ -2902,7 +3213,7 @@ export class VoronoiCanvasEngine {
         continue
       }
       weight += (combinedScale - 1) * 0.055
-      if (cell.id === this.state.selectedCellId) weight += 0.003
+      if (this.state.selectedCellIds.includes(cell.id)) weight += 0.003
       if (cell.id === activeMergeTargetId) weight += 0.024
       const requiredArea = (textRequirements.get(cell.id) ?? 0) * this.crowdingScale
       const requiredWeight =
@@ -3037,6 +3348,46 @@ export class VoronoiCanvasEngine {
         const memberSites = members
           .map((cell) => weightedSites.get(cell.id))
           .filter((site): site is WeightedSite => Boolean(site))
+          .map((site) => ({ ...site }))
+        const ghost =
+          this.groupGhostSlot?.groupId === group.id &&
+          this.groupGhostSlot.strength > 0.001
+            ? this.groupGhostSlot
+            : null
+        if (ghost) {
+          const ghostPixel = this.pixelFromSite(ghost.site)
+          const repulsionRadius = Math.max(1, this.settings.group.ghostSizePx * 2.5)
+          for (const site of memberSites) {
+            if (site.id === this.activeGroupCue?.cellId) continue
+            let dx = site.x - ghostPixel.x
+            let dy = site.y - ghostPixel.y
+            let magnitude = Math.hypot(dx, dy)
+            if (magnitude < 0.001) {
+              const member = members.find((candidate) => candidate.id === site.id)
+              const angle = (member?.creation.order ?? 1) * 2.399963229728653
+              dx = Math.cos(angle)
+              dy = Math.sin(angle)
+              magnitude = 1
+            }
+            const proximity = clamp(1 - magnitude / repulsionRadius, 0, 1)
+            const push =
+              proximity *
+              this.settings.group.ghostRepulsion *
+              this.settings.group.ghostSizePx *
+              ghost.strength
+            site.x += (dx / magnitude) * push
+            site.y += (dy / magnitude) * push
+          }
+          memberSites.push({
+            id: `group-ghost:${group.id}`,
+            x: ghostPixel.x,
+            y: ghostPixel.y,
+            weight:
+              this.settings.group.ghostSizePx *
+              this.settings.group.ghostSizePx *
+              ghost.strength,
+          })
+        }
         const internalCells = computePowerDiagram(memberSites, {
           width: this.width,
           height: this.height,
@@ -3121,7 +3472,7 @@ export class VoronoiCanvasEngine {
     }
 
     this.removeInactiveVisuals(activeIds, delta)
-    this.renderGroups(delta, groupGeometries)
+    this.renderGroups(delta, groupGeometries, time)
     this.renderRelationships(time)
     this.renderHandles()
     this.updateEditorLayout()
@@ -3146,6 +3497,11 @@ export class VoronoiCanvasEngine {
           color:
             this.model.groups.find((group) => group.id === id)?.style.tint ||
             this.settings.palette.groupTint,
+          strokeBoost:
+            this.activeGroupCue?.groupId === id
+              ? this.settings.group.cueStrokeExcitation *
+                this.activeGroupCue.strength
+              : 0,
         })),
     })
     this.notifyCanvasChanged()
@@ -3175,6 +3531,7 @@ export class VoronoiCanvasEngine {
     mix(this.fieldOuterRadius, 1)
     mix(this.sourceDirtyToken, 1)
     mixText(this.state.selectedCellId ?? '')
+    for (const id of this.state.selectedCellIds) mixText(id)
     mixText(this.state.selectedGroupId ?? '')
     mixText(this.state.editingId ?? '')
     for (const [id, visual] of this.visuals) {
@@ -3617,17 +3974,48 @@ export class VoronoiCanvasEngine {
     }
   }
 
-  private renderGroups(delta: number, geometries: ReadonlyMap<string, Point2[]>) {
+  private renderGroups(
+    delta: number,
+    geometries: ReadonlyMap<string, Point2[]>,
+    time: number,
+  ) {
     const active = new Set(this.model.groups.map((group) => group.id))
     for (const group of this.model.groups) {
       const geometry = geometries.get(group.id)
       if (!geometry || geometry.length < 3) continue
       const visual = this.ensureGroupVisual(group, geometry)
-      visual.targetPoints = stableSamplePolygon(
+      const stablePoints = stableSamplePolygon(
         geometry,
         GROUP_SAMPLE_COUNT,
         visual.targetPoints,
       )
+      const cue = this.activeGroupCue?.groupId === group.id
+        ? this.activeGroupCue
+        : null
+      if (cue && !this.reducedMotion) {
+        const center = polygonCentroid(stablePoints)
+        const phase = groupCuePhase(
+          time - cue.oscillatorStartedAt,
+          this.settings.group.cueFrequencyHz,
+          this.settings.group.cuePhaseOffset,
+        )
+        visual.targetPoints = stablePoints.map((point, index) => {
+          const dx = point.x - center.x
+          const dy = point.y - center.y
+          const magnitude = Math.hypot(dx, dy) || 1
+          const wave = Math.sin(
+            phase + (index / Math.max(1, stablePoints.length)) * Math.PI * 8,
+          )
+          const offset =
+            wave * this.settings.group.cueWallAmplitudePx * cue.strength
+          return {
+            x: point.x + (dx / magnitude) * offset,
+            y: point.y + (dy / magnitude) * offset,
+          }
+        })
+      } else {
+        visual.targetPoints = stablePoints
+      }
       this.interpolatePoints(
         visual.currentPoints,
         visual.targetPoints,
@@ -3662,7 +4050,10 @@ export class VoronoiCanvasEngine {
       )
       visual.path.strokeWidth =
         (this.settings.group.wallThickness +
-          (this.state.selectedGroupId === group.id ? 3 : 0)) *
+          (this.state.selectedGroupId === group.id ? 3 : 0) +
+          (cue
+            ? this.settings.group.cueStrokeExcitation * cue.strength
+            : 0)) *
         easedEmergence
       visual.path.opacity = easedEmergence
       visual.path.strokeJoin = 'round'
@@ -4066,7 +4457,7 @@ export class VoronoiCanvasEngine {
         interactionTint,
       )
     }
-    if (cell.id === this.state.selectedCellId) {
+    if (this.state.selectedCellIds.includes(cell.id)) {
       return this.mixColor(base, this.settings.palette.selectedTint, 0.48)
     }
     if (cell.groupId && this.state.selectedGroupId === cell.groupId) {
@@ -4142,20 +4533,45 @@ export class VoronoiCanvasEngine {
     const cell = this.findCell(cellId)
     if (cell && this.state.mode === 'select') this.revealIncubation(cell)
     this.state.selectedCellId = cellId
+    this.state.selectedCellIds = [cellId]
     this.state.selectedGroupId = null
-    this.callbacks.onSelectionChanged(cellId)
+    this.notifySelectionChanged()
+  }
+
+  private toggleCellSelection(cellId: string) {
+    const cell = this.findCell(cellId)
+    if (!cell || cell.kind === 'seed') return
+    const selected = new Set(this.state.selectedCellIds)
+    if (selected.has(cellId)) selected.delete(cellId)
+    else selected.add(cellId)
+    this.state.selectedCellIds = [...selected]
+    this.state.selectedCellId =
+      this.state.selectedCellIds.length === 1 ? this.state.selectedCellIds[0] : null
+    this.state.selectedGroupId = null
+    this.notifySelectionChanged()
   }
 
   private selectGroup(groupId: string) {
     this.state.selectedGroupId = groupId
     this.state.selectedCellId = null
-    this.callbacks.onSelectionChanged(`group:${groupId}`)
+    this.state.selectedCellIds = []
+    this.notifySelectionChanged()
   }
 
   private clearSelection() {
     this.state.selectedCellId = null
+    this.state.selectedCellIds = []
     this.state.selectedGroupId = null
-    this.callbacks.onSelectionChanged(null)
+    this.notifySelectionChanged()
+  }
+
+  private notifySelectionChanged() {
+    const selection =
+      this.state.selectedCellIds.length > 1
+        ? `multi:${this.state.selectedCellIds.join(',')}`
+        : this.state.selectedCellId ??
+          (this.state.selectedGroupId ? `group:${this.state.selectedGroupId}` : null)
+    this.callbacks.onSelectionChanged(selection, [...this.state.selectedCellIds])
   }
 
   private resizeCursor(direction?: Point2) {
@@ -4172,6 +4588,7 @@ export class VoronoiCanvasEngine {
     )
     this.canvas.dataset.preview = this.state.preview ? 'true' : 'false'
     this.canvas.dataset.selected = this.state.selectedCellId ?? ''
+    this.canvas.dataset.selectedCount = String(this.state.selectedCellIds.length)
     this.canvas.dataset.selectedGroup = this.state.selectedGroupId ?? ''
     this.canvas.dataset.editing = this.state.editingId ?? ''
     this.canvas.dataset.autoGrowth = String(this.autoGrowth)

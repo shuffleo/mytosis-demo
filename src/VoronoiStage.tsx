@@ -38,6 +38,7 @@ declare global {
       dieSeed: () => boolean
       undo: () => boolean
       redo: () => boolean
+      caretIndexAt: (x: number, y: number) => number | null
       postProcess: () => PostProcessDebugSnapshot | null
       mapPostProcessPoint: (point: { x: number; y: number }) => { x: number; y: number }
     }
@@ -83,6 +84,7 @@ interface VoronoiStageProps {
   onPostProcessingStatus: (status: PostProcessStatus) => void
   onHistoryChanged: (canUndo: boolean, canRedo: boolean) => void
   onEditingChanged?: (editing: boolean) => void
+  onSelectionChanged?: (selectedCellIds: readonly string[]) => void
   onModeChanged?: (mode: CanvasMode) => void
 }
 
@@ -99,6 +101,7 @@ export interface VoronoiStageHandle {
   snapshot: () => VoronoiDebugSnapshot | null
   dieFirstSeed: () => boolean
   addCellAtCentroid: () => boolean
+  groupSelectedCells: () => boolean
 }
 
 export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(function VoronoiStage({
@@ -114,6 +117,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   onPostProcessingStatus,
   onHistoryChanged,
   onEditingChanged,
+  onSelectionChanged,
   onModeChanged,
 }, forwardedRef) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -124,6 +128,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const engineRef = useRef<VoronoiCanvasEngine>(null)
   const postProcessorRef = useRef<MicroscopePostProcessor>(null)
+  const onSelectionChangedRef = useRef(onSelectionChanged)
   const wallRendererRef = useRef<WallTextureRenderer>(null)
   const initialSettingsRef = useRef(settings)
   const initialDocumentRef = useRef(initialDocument)
@@ -145,8 +150,34 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   const focusAnimationFrameRef = useRef<number | null>(null)
   const focusProgressRef = useRef(0)
   const focusMatrixRef = useRef<DOMMatrix | null>(null)
+  const focusVisualScaleRef = useRef(1)
   const [selection, setSelection] = useState<string | null>(null)
+  const [selectionCount, setSelectionCount] = useState(0)
   const previousSeedAuditRequestRef = useRef(seedAuditRequest)
+
+  const applyEditorTypography = (
+    editor: HTMLTextAreaElement,
+    layout: EditorLayout,
+    visualScale: number,
+    progress: number,
+  ) => {
+    const sourceFontSize = Math.max(6, layout.textLayout.fontSize || layout.fontSize)
+    const responsiveFocusedSize = clamp(
+      Math.min(window.innerWidth, window.innerHeight) * 0.019,
+      11,
+      16,
+    )
+    const visualFontSize =
+      sourceFontSize +
+      (responsiveFocusedSize - sourceFontSize) * smoothStep(progress)
+    const baseFontSize = visualFontSize / Math.max(1, visualScale)
+    const baseLeading =
+      (visualFontSize * (layout.textLayout.leading / sourceFontSize)) /
+      Math.max(1, visualScale)
+    editor.style.fontSize = `${baseFontSize}px`
+    editor.style.lineHeight = `${Math.max(baseFontSize, baseLeading)}px`
+    editor.dataset.visualFontSize = visualFontSize.toFixed(3)
+  }
 
   const positionEditor = (layout: EditorLayout) => {
     if (editingRef.current && layout.cellId !== editingRef.current.id) return
@@ -179,8 +210,14 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     const blockPadding = Math.max(0, (height - leading * lineCount) / 2)
     editor.style.width = `${width}px`
     editor.style.height = `${height}px`
-    editor.style.fontSize = `${fontSize}px`
-    editor.style.lineHeight = `${leading}px`
+    applyEditorTypography(
+      editor,
+      layout,
+      activeEditing?.presentation === 'focused'
+        ? focusVisualScaleRef.current
+        : 1,
+      activeEditing?.presentation === 'focused' ? focusProgressRef.current : 0,
+    )
     editor.style.paddingBlock = `${blockPadding}px`
     editor.style.paddingInline = '2px'
     if (activeEditing?.presentation === 'inline') {
@@ -204,6 +241,28 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     editor.setSelectionRange(selectionIndex, selectionIndex)
     engineRef.current?.updateEditingSelection(active.id, selectionIndex)
   }
+
+  const caretIndexForClientPoint = (x: number, y: number) => {
+    const layout = latestLayoutRef.current
+    if (!layout || !editingRef.current) return null
+    let sourcePoint = new DOMPoint(x, y)
+    try {
+      if (focusMatrixRef.current) {
+        sourcePoint = sourcePoint.matrixTransform(focusMatrixRef.current.inverse())
+      }
+    } catch {
+      return null
+    }
+    const mapped = postProcessorRef.current?.mapPointer({
+      x: sourcePoint.x,
+      y: sourcePoint.y,
+    }) ?? { x: sourcePoint.x, y: sourcePoint.y }
+    return nearestCaretIndex(layout.textLayout, mapped)
+  }
+
+  useEffect(() => {
+    onSelectionChangedRef.current = onSelectionChanged
+  }, [onSelectionChanged])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -239,7 +298,11 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
           setFocusLayout(null)
           setFocusPhase('idle')
         },
-        onSelectionChanged: setSelection,
+        onSelectionChanged: (value, selectedCellIds) => {
+          setSelection(value)
+          setSelectionCount(selectedCellIds.length)
+          onSelectionChangedRef.current?.(selectedCellIds)
+        },
         onModeChanged,
         onCanvasChanged: (field, animated) => {
           const nextBounds = { center: { ...field.center }, radius: field.radius }
@@ -283,6 +346,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       dieSeed: () => engine.forceExpireFirstSeed(),
       undo: () => engine.undo(),
       redo: () => engine.redo(),
+      caretIndexAt: (x: number, y: number) => caretIndexForClientPoint(x, y),
       postProcess: () => postProcessor.getDebugSnapshot(),
       mapPostProcessPoint: (point: { x: number; y: number }) =>
         postProcessor.mapPointer(point),
@@ -419,6 +483,8 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       snapshot: () => engineRef.current?.getSnapshot() ?? null,
       dieFirstSeed: () => engineRef.current?.forceExpireFirstSeed() ?? false,
       addCellAtCentroid: () => engineRef.current?.addCellAtCentroid() ?? false,
+      groupSelectedCells: () =>
+        engineRef.current?.groupSelectedCells() ?? false,
     }),
     [],
   )
@@ -502,7 +568,13 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       engineRef.current?.handleKey(event.key)
       return
     }
-    if (mode === 'select' && event.key === 'Enter' && selection && !selection.startsWith('group:')) {
+    if (
+      mode === 'select' &&
+      event.key === 'Enter' &&
+      selectionCount === 1 &&
+      selection &&
+      !selection.startsWith('group:')
+    ) {
       event.preventDefault()
       engineRef.current?.startEditing(selection)
     }
@@ -516,24 +588,15 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     event: ReactPointerEvent<HTMLElement>,
   ) => {
     const editor = editorRef.current
-    const layout = latestLayoutRef.current
     const active = editingRef.current
-    if (!editor || !layout || !active) return
+    if (!editor || !active) return
     event.preventDefault()
     event.stopPropagation()
-    let sourcePoint = new DOMPoint(event.clientX, event.clientY)
-    try {
-      if (focusMatrixRef.current) {
-        sourcePoint = sourcePoint.matrixTransform(focusMatrixRef.current.inverse())
-      }
-    } catch {
-      // A transient zero-scale matrix can occur for one frame during resize.
-    }
-    const mapped = postProcessorRef.current?.mapPointer({
-      x: sourcePoint.x,
-      y: sourcePoint.y,
-    }) ?? { x: sourcePoint.x, y: sourcePoint.y }
-    setEditorCaretFromSourcePoint(mapped)
+    const selectionIndex = caretIndexForClientPoint(event.clientX, event.clientY)
+    if (selectionIndex === null) return
+    editor.focus({ preventScroll: true })
+    editor.setSelectionRange(selectionIndex, selectionIndex)
+    engineRef.current?.updateEditingSelection(active.id, selectionIndex)
   }
 
   const focusedPresentation = editing?.presentation === 'focused' || focusExiting
@@ -563,6 +626,9 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
         )
         .join(',')})`
     : undefined
+  const textOverlayVignette = focusedPresentation
+    ? settings.effects.focusVignette
+    : settings.effects.vignette
   const focusStyle = {
     '--focus-scale': String(focusScale),
     '--focus-x': `${focusTranslateX}px`,
@@ -579,6 +645,11 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     '--field-center-y': `${fieldBounds.center.y}px`,
     '--field-radius': `${fieldBounds.radius}px`,
     '--circle-edge-feather': `${settings.effects.circle.edgeFeatherPx}px`,
+    '--focus-overlay-dim': String(textOverlayVignette.dim * 0.34),
+    '--focus-overlay-blur': `${textOverlayVignette.blurRadius * 0.35}px`,
+    '--focus-overlay-grain': String(
+      Math.min(0.14, settings.effects.circle.grain + textOverlayVignette.grain),
+    ),
   } as CSSProperties
 
   const applyFocusVisual = (progress: number) => {
@@ -656,12 +727,15 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
       const editor = editorRef.current
       const layout = latestLayoutRef.current
       if (editor && layout && editingRef.current?.presentation === 'focused') {
+        const visualScale = scene.scale * scene.orbitScale
+        focusVisualScaleRef.current = visualScale
         const point = new DOMPoint(layout.x, layout.y).matrixTransform(matrix)
         editor.style.left = `${point.x}px`
         editor.style.top = `${point.y}px`
-        editor.style.transform = `translate(-50%, -50%) rotate(${(scene.orbitAngle * 180) / Math.PI}deg) scale(${scene.scale * scene.orbitScale})`
+        editor.style.transform = `translate(-50%, -50%) rotate(${(scene.orbitAngle * 180) / Math.PI}deg) scale(${visualScale})`
         editor.style.filter = `blur(${scene.blurPx}px)`
         editor.style.opacity = String(scene.opacity)
+        applyEditorTypography(editor, layout, visualScale, bounded)
       }
     }
   }
@@ -873,8 +947,22 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
           />
         </>
       )}
+      {(editing || focusExiting) && (
+        <div
+          className="microscope-text-overlay"
+          data-testid="microscope-text-overlay"
+          data-overlay-state={
+            focusExiting ? 'exiting' : editing?.presentation ?? 'focused'
+          }
+          aria-hidden="true"
+        />
+      )}
       <div className="sr-only" aria-live="polite">
-        {selection ? `Cell ${selection} selected` : 'No cell selected'}
+        {selectionCount > 1
+          ? `${selectionCount} cells selected`
+          : selection
+            ? `Cell ${selection} selected`
+            : 'No cell selected'}
       </div>
     </main>
   )

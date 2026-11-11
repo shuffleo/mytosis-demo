@@ -89,11 +89,20 @@ describe('refined control defaults', () => {
       wallGrainFrequency: 0.1,
       wallGrainOctaves: 2,
       wallGrainOpacity: 0.74,
-      attraction: 0.32,
-      detachThreshold: 0.8,
+      attraction: 0.4,
+      detachThreshold: 0.4,
       motionEasing: 'smooth',
       attachDistancePx: 42,
       attachHoldMs: 720,
+      cueFrequencyHz: 7,
+      cueCellAmplitudePx: 1.6,
+      cueWallAmplitudePx: 2.4,
+      cueStrokeExcitation: 4,
+      cuePhaseOffset: 0.18,
+      ghostSizePx: 42,
+      ghostRepulsion: 0.34,
+      ghostResponse: 12,
+      cueEasing: 'smooth',
     })
     expect(defaultSettings.mergeSplit).toEqual({
       enabled: true,
@@ -370,6 +379,34 @@ describe('refined control defaults', () => {
     legacy.effects.focusVignette.dim = 0.41
 
     expect(migrateSettings(legacy).effects.focusVignette.dim).toBe(0.41)
+  })
+
+  it('adds transient group cue controls to version-fourteen settings', () => {
+    const legacy = structuredClone(defaultSettings)
+    legacy.schemaVersion = 14
+    delete (legacy.group as Partial<typeof legacy.group>).cueFrequencyHz
+    delete (legacy.group as Partial<typeof legacy.group>).cueCellAmplitudePx
+    delete (legacy.group as Partial<typeof legacy.group>).cueWallAmplitudePx
+    delete (legacy.group as Partial<typeof legacy.group>).cueStrokeExcitation
+    delete (legacy.group as Partial<typeof legacy.group>).cuePhaseOffset
+    delete (legacy.group as Partial<typeof legacy.group>).ghostSizePx
+    delete (legacy.group as Partial<typeof legacy.group>).ghostRepulsion
+    delete (legacy.group as Partial<typeof legacy.group>).ghostResponse
+    delete (legacy.group as Partial<typeof legacy.group>).cueEasing
+
+    const migrated = migrateSettings(legacy)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.group).toMatchObject({
+      cueFrequencyHz: 7,
+      cueCellAmplitudePx: 1.6,
+      cueWallAmplitudePx: 2.4,
+      cueStrokeExcitation: 4,
+      cuePhaseOffset: 0.18,
+      ghostSizePx: 42,
+      ghostRepulsion: 0.34,
+      ghostResponse: 12,
+      cueEasing: 'smooth',
+    })
   })
 
   it('keeps cell text WCAG AA readable in every microscope palette', () => {

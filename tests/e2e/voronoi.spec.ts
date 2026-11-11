@@ -73,6 +73,7 @@ interface Snapshot {
   cells: Record<string, Point2[]>
   handles: Point2[]
   groupWalls: Record<string, Point2[]>
+  groupWallEffects: Record<string, { strokeWidth: number }>
   breathScales: Record<string, { cell: number; text: number }>
   seedProgress: Record<string, number>
   incubationProgress: Record<string, number>
@@ -89,9 +90,17 @@ interface Snapshot {
   textLayouts: Record<string, { engine: 'pretext' | 'fallback'; lineCount: number }>
   stickyBridges: number
   mergeCandidateId: string | null
+  groupCue: {
+    kind: 'join' | 'detach'
+    cellId: string
+    groupId: string
+    strength: number
+    ghostStrength: number
+  } | null
   history: { undoDepth: number; redoDepth: number }
   gesture: {
     kind: string
+    pendingDetach?: boolean
     attachCandidateGroupId?: string | null
     attachArmedGroupId?: string | null
   } | null
@@ -205,6 +214,15 @@ interface Snapshot {
       attachContactThreshold: number
       attachDistancePx: number
       attachHoldMs: number
+      cueFrequencyHz: number
+      cueCellAmplitudePx: number
+      cueWallAmplitudePx: number
+      cueStrokeExcitation: number
+      cuePhaseOffset: number
+      ghostSizePx: number
+      ghostRepulsion: number
+      ghostResponse: number
+      cueEasing: 'smooth' | 'spring' | 'linear'
       motionEasing: 'smooth' | 'spring' | 'direct'
     }
     mergeSplit: {
@@ -357,6 +375,22 @@ async function sitePoint(page: Page, cellId: string) {
   })
 }
 
+async function groupCells(page: Page, cellIds: readonly string[]) {
+  await page.getByTestId('tool-select').click()
+  await page.keyboard.down('Shift')
+  try {
+    for (const cellId of cellIds) {
+      const point = await sitePoint(page, cellId)
+      await page.mouse.click(point.x, point.y)
+    }
+  } finally {
+    await page.keyboard.up('Shift')
+  }
+  await expect(page.getByTestId('tool-group')).toBeVisible()
+  await page.getByTestId('tool-group').click()
+  await expect(page.getByTestId('autogroup-toggle')).toBeVisible()
+}
+
 async function cellVisualPoint(page: Page, cellId: string) {
   const state = await snapshot(page)
   const polygon = state.cells[cellId]
@@ -405,7 +439,7 @@ test.beforeEach(async ({ page }) => {
 
 test('uses exact microscope defaults and composites Paper text below sharp UI', async ({ page }) => {
   const state = await snapshot(page)
-  expect(state.settings.schemaVersion).toBe(14)
+  expect(state.settings.schemaVersion).toBe(15)
   expect(state.settings.effects).toEqual({
     circle: {
       grain: 0.04,
@@ -690,6 +724,26 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   const editor = page.getByTestId('cell-editor')
   await expect(editor).toBeFocused()
   await expect(page.getByTestId('focus-edit-dismiss')).toBeVisible()
+  const overlay = page.getByTestId('microscope-text-overlay')
+  await expect(overlay).toHaveAttribute('data-overlay-state', 'focused')
+  const enteringLayerContract = await page.evaluate(() => {
+    const source = document.querySelector<HTMLElement>('[data-testid="voronoi-canvas"]')!
+    const shader = document.querySelector<HTMLElement>('[data-testid="microscope-canvas"]')!
+    const editor = document.querySelector<HTMLElement>('[data-testid="cell-editor"]')!
+    const overlay = document.querySelector<HTMLElement>(
+      '[data-testid="microscope-text-overlay"]',
+    )!
+    return {
+      source: Number.parseInt(getComputedStyle(source).zIndex, 10),
+      shader: Number.parseInt(getComputedStyle(shader).zIndex, 10),
+      editor: Number.parseInt(getComputedStyle(editor).zIndex, 10),
+      overlay: Number.parseInt(getComputedStyle(overlay).zIndex, 10),
+      overlayPointerEvents: getComputedStyle(overlay).pointerEvents,
+    }
+  })
+  expect(enteringLayerContract.source).toBeLessThan(enteringLayerContract.shader)
+  expect(enteringLayerContract.editor).toBeLessThan(enteringLayerContract.overlay)
+  expect(enteringLayerContract.overlayPointerEvents).toBe('none')
   const fixedOpticsBefore = await page.getByTestId('microscope-canvas').evaluate((element) => {
     const bounds = element.getBoundingClientRect()
     return {
@@ -728,6 +782,14 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
       textFill: style.getPropertyValue('-webkit-text-fill-color'),
       pointerEvents: style.pointerEvents,
       spellcheck: (element as HTMLTextAreaElement).spellcheck,
+      computedFontSize: Number.parseFloat(style.fontSize),
+      transformScale: Math.hypot(
+        new DOMMatrixReadOnly(style.transform).a,
+        new DOMMatrixReadOnly(style.transform).b,
+      ),
+      visualFontSize: Number.parseFloat(
+        (element as HTMLElement).dataset.visualFontSize ?? '0',
+      ),
     }
   })
   expect(editorStyle.width).toBeGreaterThan(20)
@@ -737,6 +799,12 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
   expect(editorStyle.textFill).not.toBe('rgba(0, 0, 0, 0)')
   expect(editorStyle.pointerEvents).toBe('auto')
   expect(editorStyle.spellcheck).toBe(true)
+  expect(editorStyle.visualFontSize).toBeGreaterThanOrEqual(11)
+  expect(editorStyle.visualFontSize).toBeLessThanOrEqual(16)
+  expect(editorStyle.computedFontSize * editorStyle.transformScale).toBeCloseTo(
+    editorStyle.visualFontSize,
+    1,
+  )
   const {
     canvas: focusedCanvas,
     postProcess: focusedPostProcess,
@@ -802,17 +870,22 @@ test('zooms a cell into a large integrated editor and restores the microscope', 
     Math.max(...draftPolygon.map((point) => point.y)) + 1,
   )
   await expect(page.locator('.voronoi-stage')).toHaveCSS('--focus-blur', '22px')
-  await expect(page.getByTestId('tool-add')).toHaveCount(0)
+  await expect(page.getByTestId('tool-add')).toBeVisible()
+  await expect(page.getByTestId('autogroup-toggle')).toBeVisible()
+  await expect(page.getByTestId('sprout-toggle')).toBeVisible()
   await expect(page.getByTestId('tool-group')).toHaveCount(0)
   await expect(page.getByTestId('tool-merge')).toHaveCount(0)
 
   await page.mouse.click(8, 8)
   await expect(editor).toHaveCount(0)
   await expect(page.locator('.voronoi-stage')).toHaveAttribute('data-focus-phase', 'exiting')
+  await expect(overlay).toHaveAttribute('data-overlay-state', 'exiting')
+  await expect(overlay).toHaveCSS('pointer-events', 'none')
   await expect
     .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
     .toBe('idle')
   await expect(page.locator('.microscope-scene')).not.toHaveClass(/is-focus-/)
+  await expect(overlay).toHaveCount(0)
   const restored = await postProcessSnapshot(page)
   expect(restored.focusScene.scale).toBeCloseTo(1, 5)
   expect(restored.focusScene.orbitAngle).toBeCloseTo(0, 5)
@@ -844,6 +917,44 @@ test('retains the direct focused-editor zoom when the tracked transition is off'
   await expect
     .poll(async () => page.locator('.voronoi-stage').getAttribute('data-focus-phase'))
     .toBe('idle')
+})
+
+test('keeps newly created placeholder text under the microscope overlay from its first frame', async ({
+  page,
+}) => {
+  const before = await snapshot(page)
+  await page.getByTestId('tool-add').click()
+  await page.mouse.click(
+    before.field.center.x - before.field.radius * 0.14,
+    before.field.center.y + before.field.radius * 0.08,
+  )
+  const editor = page.getByTestId('cell-editor')
+  const overlay = page.getByTestId('microscope-text-overlay')
+  await expect(editor).toHaveAttribute('data-presentation', 'inline')
+  await expect(editor).not.toHaveAttribute('placeholder', '')
+  await expect(overlay).toHaveAttribute('data-overlay-state', 'inline')
+  const layerContract = await page.evaluate(() => {
+    const z = (testId: string) =>
+      Number.parseInt(
+        getComputedStyle(
+          document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!,
+        ).zIndex,
+        10,
+      )
+    return {
+      source: z('voronoi-canvas'),
+      shader: z('microscope-canvas'),
+      editor: z('cell-editor'),
+      overlay: z('microscope-text-overlay'),
+    }
+  })
+  expect(layerContract.source).toBeLessThan(layerContract.shader)
+  expect(layerContract.editor).toBeLessThan(layerContract.overlay)
+
+  await editor.fill('A newly created thought.')
+  await editor.press('Enter')
+  await expect(overlay).toHaveCount(0)
+  await expect(page.getByTestId('microscope-canvas')).toBeVisible()
 })
 
 test('keeps CRT color shift and bulge while phosphor and scanlines are independently off', async ({
@@ -971,17 +1082,48 @@ test('stops texture uploads when static and falls back without WebGL', async ({ 
     x: state.field.center.x - state.field.radius * 0.12,
     y: state.field.center.y,
   }
+  await page.getByTestId('tool-add').click()
   await page.mouse.move(point.x, point.y)
   await expect.poll(async () => (await snapshot(page)).previewId).not.toBeNull()
 })
 
 test('switches New Select tools, previews, and reuses the single empty cell at center', async ({ page }) => {
   const toolbar = page.getByRole('toolbar', { name: 'Canvas tools' })
-  await expect(toolbar.getByTestId('tool-add')).toHaveAttribute('aria-pressed', 'true')
-  await expect(toolbar.getByTestId('tool-select')).toHaveAttribute('aria-pressed', 'false')
-  await expect(toolbar.getByTestId('tool-group')).toHaveAttribute('aria-pressed', 'false')
+  await expect(toolbar.getByTestId('tool-add')).toHaveAttribute('aria-pressed', 'false')
+  await expect(toolbar.getByTestId('tool-select')).toHaveAttribute('aria-pressed', 'true')
+  await expect(toolbar.getByTestId('autogroup-toggle')).toBeVisible()
   await expect(toolbar.getByTestId('tool-merge')).toHaveCount(0)
   await expect(toolbar.getByTestId('sprout-toggle')).toBeVisible()
+  await expect(toolbar.getByTestId('tool-select').locator('img')).toHaveAttribute(
+    'src',
+    '/assets/toolbar/select%20tool.svg',
+  )
+  await expect(toolbar.getByTestId('tool-add').locator('img')).toHaveAttribute(
+    'src',
+    '/assets/toolbar/add%20cell.svg',
+  )
+  await expect(toolbar.getByTestId('autogroup-toggle').locator('img')).toHaveAttribute(
+    'src',
+    '/assets/toolbar/auto%20group.svg',
+  )
+  await expect(toolbar.getByTestId('sprout-toggle').locator('img')).toHaveAttribute(
+    'src',
+    '/assets/toolbar/cultivate%20:%20auto%20seed.svg',
+  )
+  await expect(toolbar.getByTestId('history-undo').locator('img')).toHaveAttribute(
+    'src',
+    '/assets/toolbar/undo.svg',
+  )
+  await expect(toolbar.getByTestId('history-redo').locator('img')).toHaveAttribute(
+    'src',
+    '/assets/toolbar/redo.svg',
+  )
+  await expect(toolbar.getByTestId('list-view-toggle').locator('img')).toHaveAttribute(
+    'src',
+    '/assets/toolbar/list%20view.svg',
+  )
+  await toolbar.getByTestId('tool-add').click()
+  await expect(toolbar.getByTestId('tool-add')).toHaveAttribute('aria-pressed', 'true')
 
   const before = await snapshot(page)
   const tightGapCells = ['cell-1', 'cell-2', 'cell-6'].map((id) => {
@@ -1063,11 +1205,30 @@ test('switches New Select tools, previews, and reuses the single empty cell at c
   await page.getByTestId('sprout-toggle').click()
   await expect(page.getByTestId('sprout-toggle')).toHaveAttribute('aria-pressed', 'true')
   await page.getByTestId('tool-select').click()
-  await expect(page.getByTestId('sprout-toggle')).toBeHidden()
+  await expect(page.getByTestId('sprout-toggle')).toBeVisible()
+  await expect(page.getByTestId('sprout-toggle')).toHaveAttribute('aria-pressed', 'true')
   expect((await snapshot(page)).previewId).toBeNull()
+
+  await page.keyboard.down('Shift')
+  try {
+    for (const id of ['cell-1', 'cell-2']) {
+      const point = await sitePoint(page, id)
+      await page.mouse.click(point.x, point.y)
+    }
+  } finally {
+    await page.keyboard.up('Shift')
+  }
+  await expect(page.getByTestId('tool-add')).toBeDisabled()
+  await expect(page.getByTestId('autogroup-toggle')).toHaveCount(0)
+  await expect(page.getByTestId('tool-group')).toBeVisible()
+  await expect(page.getByTestId('tool-group').locator('img')).toHaveAttribute(
+    'src',
+    '/assets/toolbar/group%20as%20group%20cell.svg',
+  )
+  await expect(page.getByTestId('sprout-toggle')).toHaveAttribute('aria-pressed', 'true')
   await page.getByTestId('tool-group').click()
-  expect((await snapshot(page)).mode).toBe('group')
-  await page.getByTestId('tool-select').click()
+  await expect(page.getByTestId('autogroup-toggle')).toBeVisible()
+  await expect(page.getByTestId('tool-add')).toBeEnabled()
   expect((await snapshot(page)).mode).toBe('select')
 })
 
@@ -1127,11 +1288,20 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
   expect(fresh.settings.group).toMatchObject({
     wallThickness: 12,
     wallGap: 2,
-    attraction: 0.32,
-    detachThreshold: 0.8,
+    attraction: 0.4,
+    detachThreshold: 0.4,
     motionEasing: 'smooth',
     attachDistancePx: 42,
     attachHoldMs: 720,
+    cueFrequencyHz: 7,
+    cueCellAmplitudePx: 1.6,
+    cueWallAmplitudePx: 2.4,
+    cueStrokeExcitation: 4,
+    cuePhaseOffset: 0.18,
+    ghostSizePx: 42,
+    ghostRepulsion: 0.34,
+    ghostResponse: 12,
+    cueEasing: 'smooth',
     wallGrainFrequency: 0.1,
     wallGrainOctaves: 2,
     wallGrainOpacity: 0.74,
@@ -1216,7 +1386,7 @@ test('uses exact defaults, survives slider extremes, and resets cleanly', async 
   await expect(newSelect).toBeChecked()
   await expect(page.getByTestId('tool-merge')).toHaveCount(0)
   await newSelect.evaluate((element: HTMLInputElement) => element.click())
-  await expect(page.getByTestId('tool-merge')).toBeEnabled()
+  await expect(page.getByTestId('tool-merge')).toHaveCount(0)
 
   await page.getByTestId('settings-toggle').click()
   await expect(page.getByTestId('settings-panel')).toBeHidden()
@@ -1386,6 +1556,7 @@ test('undoes and redoes add, move, resize, edit, delete, and group mutations', a
   const initial = await page.evaluate(() => window.__VORONOI_DEBUG__?.serialize())
   const field = (await snapshot(page)).field
   const addPoint = { x: field.center.x + 20, y: field.center.y + 14 }
+  await page.getByTestId('tool-add').click()
   await page.mouse.move(addPoint.x, addPoint.y)
   await page.mouse.click(addPoint.x, addPoint.y)
   await expect.poll(async () => (await snapshot(page)).cellCount).toBe(13)
@@ -1442,18 +1613,12 @@ test('undoes and redoes add, move, resize, edit, delete, and group mutations', a
   await page.evaluate(() => window.__VORONOI_DEBUG__?.undo())
   expect((await snapshot(page)).model.cells.some((cell) => cell.id === 'cell-4')).toBe(true)
 
-  await page.getByTestId('tool-group').click()
-  for (const id of ['cell-1', 'cell-2']) {
-    point = await sitePoint(page, id)
-    await page.mouse.click(point.x, point.y)
-  }
+  await groupCells(page, ['cell-1', 'cell-2'])
   expect((await snapshot(page)).model.groups[0].memberIds).toEqual(['cell-1', 'cell-2'])
-  await page.evaluate(() => window.__VORONOI_DEBUG__?.undo())
   await page.evaluate(() => window.__VORONOI_DEBUG__?.undo())
   state = await snapshot(page)
   expect(state.model.groups).toHaveLength(0)
   expect(state.model.cells.find((cell) => cell.id === 'cell-1')?.groupId).toBeUndefined()
-  await page.evaluate(() => window.__VORONOI_DEBUG__?.redo())
   await page.evaluate(() => window.__VORONOI_DEBUG__?.redo())
   expect((await snapshot(page)).model.groups[0].memberIds).toEqual(['cell-1', 'cell-2'])
 })
@@ -1584,12 +1749,7 @@ test('expires an inactive persisted seed without requiring the audit button', as
 })
 
 test('excludes grouped journals from auto-growth synthesis candidates', async ({ page }) => {
-  await page.getByTestId('tool-group').click()
-  for (const id of ['cell-1', 'cell-2', 'cell-3']) {
-    const point = await sitePoint(page, id)
-    await page.mouse.click(point.x, point.y)
-  }
-  await page.keyboard.press('Escape')
+  await groupCells(page, ['cell-1', 'cell-2', 'cell-3'])
   const spawned = await page.evaluate(() => window.__VORONOI_DEBUG__?.forceSeed() ?? false)
   expect(spawned).toBe(true)
   const state = await snapshot(page)
@@ -1614,6 +1774,9 @@ test('New Select delays sticky merge, long-press splits, and keeps both reversib
   await page.mouse.move(target.x, target.y, { steps: 2 })
   expect((await snapshot(page)).mergeCandidateId).toBeNull()
   await page.waitForTimeout(220)
+  await expect
+    .poll(async () => (await snapshot(page)).interactionEffects['cell-2']?.tint ?? 0)
+    .toBeGreaterThan(0)
   const activeZoneState = await snapshot(page)
   expect(activeZoneState.interactionEffects['cell-2']?.tint).toBeGreaterThan(0)
   expect(activeZoneState.interactionEffects['cell-2']?.grainBoost).toBeGreaterThan(1)
@@ -1688,7 +1851,9 @@ test('keeps merge affordances static when reduced motion is preferred', async ({
   await page.mouse.move(source.x, source.y)
   await page.mouse.down()
   await page.mouse.move(target.x, target.y, { steps: 4 })
-  await page.waitForTimeout(240)
+  await expect
+    .poll(async () => (await snapshot(page)).interactionEffects['cell-2']?.tint ?? 0)
+    .toBeGreaterThan(0)
   const state = await snapshot(page)
   expect(state.interactionEffects['cell-2']?.tint).toBeGreaterThan(0)
   expect(state.interactionEffects['cell-2']?.grainBoost).toBeGreaterThan(1)
@@ -1742,24 +1907,19 @@ test('keeps ambient culture motion render-only and adjustable', async ({ page })
 })
 
 test('merges and splits members without escaping their hierarchical group', async ({ page }) => {
-  await page.getByTestId('tool-group').click()
-  let point = await sitePoint(page, 'cell-1')
-  await page.mouse.click(point.x, point.y)
-  const singleState = await snapshot(page)
-  const singleMember = singleState.model.cells.find((cell) => cell.id === 'cell-1')
-  expect(singleState.model.groups[0].container.weight).toBeGreaterThan(
-    (singleMember?.weight ?? 0) + 0.01,
-  )
-  expect(singleState.model.groups[0].style.tint).toBe(
-    singleState.settings.palette.group1,
-  )
-  point = await sitePoint(page, 'cell-2')
-  await page.mouse.click(point.x, point.y)
-  await page.keyboard.press('Escape')
+  await groupCells(page, ['cell-1', 'cell-2'])
   await page.waitForTimeout(900)
   let state = await snapshot(page)
   const groupId = state.model.groups[0]?.id
   if (!groupId) throw new Error('Expected a group')
+  expect(state.model.groups[0].container.weight).toBeGreaterThan(
+    Math.max(
+      ...state.model.cells
+        .filter((cell) => cell.groupId === groupId)
+        .map((cell) => cell.weight),
+    ) + 0.01,
+  )
+  expect(state.model.groups[0].style.tint).toBe(state.settings.palette.group1)
 
   await page.getByTestId('tool-select').click()
   const source = await cellVisualPoint(page, 'cell-1')
@@ -1796,18 +1956,15 @@ test('merges and splits members without escaping their hierarchical group', asyn
 })
 
 test('wall-selects and resizes a group, then individually edits, reorders, and detaches a member', async ({ page }) => {
-  await page.getByTestId('tool-group').click()
   const firstPoint = await sitePoint(page, 'cell-5')
-  const secondPoint = await sitePoint(page, 'cell-9')
   await page.mouse.move(firstPoint.x, firstPoint.y)
   await expect.poll(async () => (await snapshot(page)).hoveredId).toBe('cell-5')
-  await page.mouse.click(firstPoint.x, firstPoint.y)
-  await page.mouse.click(secondPoint.x, secondPoint.y)
+  await groupCells(page, ['cell-5', 'cell-9'])
   await page.waitForTimeout(650)
   let state = await snapshot(page)
   const group = state.model.groups[0]
   expect(group.memberIds).toEqual(['cell-5', 'cell-9'])
-  expect(state.acquiringGroupId).toBe(group.id)
+  expect(state.acquiringGroupId).toBeNull()
   expect(state.groupWalls[group.id].length).toBeGreaterThan(32)
   for (const point of state.groupWalls[group.id]) {
     expect(Math.hypot(point.x - state.field.center.x, point.y - state.field.center.y)).toBeLessThanOrEqual(
@@ -1888,6 +2045,14 @@ test('wall-selects and resizes a group, then individually edits, reorders, and d
   await page.mouse.move(detachStart.x, detachStart.y)
   await page.mouse.down()
   await page.mouse.move(detachTarget.x, detachTarget.y, { steps: 18 })
+  await expect.poll(async () => (await snapshot(page)).groupCue?.kind).toBe('detach')
+  await expect
+    .poll(async () => (await snapshot(page)).groupCue?.ghostStrength ?? 0)
+    .toBeGreaterThan(0)
+  await page.waitForTimeout(820)
+  await expect.poll(async () => (await snapshot(page)).gesture?.pendingDetach).toBe(true)
+  expect(await page.evaluate(() => window.__VORONOI_DEBUG__!.serialize()))
+    .not.toContain('group-ghost:')
   await page.mouse.up()
   await page.waitForTimeout(250)
   state = await snapshot(page)
@@ -1898,6 +2063,29 @@ test('wall-selects and resizes a group, then individually edits, reorders, and d
 test('pulls distant members inward, dwell-attaches at the wall, and preserves deep attach', async ({
   page,
 }) => {
+  test.setTimeout(60_000)
+  await page.getByTestId('settings-toggle').click()
+  const panel = page.getByTestId('settings-panel')
+  await panel.getByText('Groups', { exact: true }).click()
+  await panel.getByText('Join / detach cues', { exact: true }).click()
+  for (const label of [
+    'join threshold px',
+    'detach threshold',
+    'dwell ms',
+    'cue frequency hz',
+    'cell amplitude px',
+    'wall amplitude px',
+    'stroke excitation px',
+    'phase offset',
+    'ghost size px',
+    'ghost repulsion',
+    'ghost response',
+    'cue easing',
+  ]) {
+    await expect(panel.getByText(label, { exact: true })).toBeVisible()
+  }
+  await setNumericBinding(page, 'dwell ms', 1800)
+  await page.getByTestId('settings-toggle').click()
   const initial = await snapshot(page)
   const firstInitial = initial.model.cells.find((cell) => cell.id === 'cell-1')
   const secondInitial = initial.model.cells.find((cell) => cell.id === 'cell-11')
@@ -1906,12 +2094,7 @@ test('pulls distant members inward, dwell-attaches at the wall, and preserves de
     (firstInitial?.site.y ?? 0) - (secondInitial?.site.y ?? 0),
   )
 
-  await page.getByTestId('tool-group').click()
-  for (const id of ['cell-1', 'cell-11', 'cell-5']) {
-    const point = await sitePoint(page, id)
-    await page.mouse.click(point.x, point.y)
-  }
-  await page.keyboard.press('Escape')
+  await groupCells(page, ['cell-1', 'cell-11', 'cell-5'])
   await page.waitForTimeout(1500)
   let state = await snapshot(page)
   const group = state.model.groups[0]
@@ -1933,6 +2116,7 @@ test('pulls distant members inward, dwell-attaches at the wall, and preserves de
   await page.mouse.up()
   await page.waitForTimeout(200)
   expect((await snapshot(page)).model.cells.find((cell) => cell.id === 'cell-6')?.groupId).toBeUndefined()
+  await expect.poll(async () => (await snapshot(page)).groupCue).toBeNull()
 
   attachPoint = await cellVisualPoint(page, 'cell-6')
   const dwellWall = await visiblePointForSource(page, wallPoint(await snapshot(page), group.id))
@@ -1942,10 +2126,40 @@ test('pulls distant members inward, dwell-attaches at the wall, and preserves de
   await expect
     .poll(async () => (await snapshot(page)).gesture?.attachCandidateGroupId)
     .toBe(group.id)
-  await page.waitForTimeout(850)
+  await expect.poll(async () => (await snapshot(page)).groupCue?.kind).toBe('join')
+  await expect
+    .poll(async () => (await snapshot(page)).groupCue?.ghostStrength ?? 0)
+    .toBeGreaterThan(0)
+  expect(await page.evaluate(() => window.__VORONOI_DEBUG__!.serialize()))
+    .not.toContain('group-ghost:')
+  await page.mouse.up()
+  await expect.poll(async () => (await snapshot(page)).groupCue).toBeNull()
+  expect((await snapshot(page)).model.cells.find((cell) => cell.id === 'cell-6')?.groupId)
+    .toBeUndefined()
+  await page.getByTestId('settings-toggle').click()
+  await panel.getByText('Groups', { exact: true }).click()
+  await panel.getByText('Join / detach cues', { exact: true }).click()
+  await setNumericBinding(page, 'dwell ms', 300)
+  await page.getByTestId('settings-toggle').click()
+
+  attachPoint = await cellVisualPoint(page, 'cell-6')
+  const armedWall = await visiblePointForSource(page, wallPoint(await snapshot(page), group.id))
+  await page.mouse.move(attachPoint.x, attachPoint.y)
+  await page.mouse.down()
+  await page.mouse.move(armedWall.x, armedWall.y, { steps: 14 })
+  await expect
+    .poll(async () => (await snapshot(page)).gesture?.attachCandidateGroupId)
+    .toBe(group.id)
+  await page.waitForTimeout(420)
   await expect
     .poll(async () => (await snapshot(page)).gesture?.attachArmedGroupId)
     .toBe(group.id)
+  const armedCue = await snapshot(page)
+  expect(armedCue.groupCue?.kind).toBe('join')
+  expect(armedCue.groupCue?.strength).toBeGreaterThan(0.7)
+  expect(armedCue.groupWallEffects[group.id].strokeWidth).toBeGreaterThan(
+    armedCue.settings.group.wallThickness,
+  )
   await expect.poll(async () => (await snapshot(page)).stickyBridges).toBeGreaterThan(0)
   await page.mouse.up()
   await expect
@@ -1979,6 +2193,7 @@ test('incubates a resting empty cell with blurred synthesis and reveals it on se
     x: before.field.center.x - before.field.radius * 0.12,
     y: before.field.center.y + before.field.radius * 0.04,
   }
+  await page.getByTestId('tool-add').click()
   await page.mouse.move(addPoint.x, addPoint.y)
   await expect.poll(async () => (await snapshot(page)).previewId).not.toBeNull()
   const previewId = (await snapshot(page)).previewId
@@ -1997,6 +2212,22 @@ test('incubates a resting empty cell with blurred synthesis and reveals it on se
   expect(state.textEffects[previewId ?? ''].blur).toBe(16)
   expect(state.textEffects[previewId ?? ''].scale).toBeLessThan(1)
   expect(state.incubationProgress[previewId ?? '']).toBeLessThan(1)
+  const incubationLayers = await page.evaluate(() => {
+    const z = (testId: string) =>
+      Number.parseInt(
+        getComputedStyle(
+          document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)!,
+        ).zIndex,
+        10,
+      )
+    return {
+      source: z('voronoi-canvas'),
+      wallNoise: z('wall-texture-canvas'),
+      shader: z('microscope-canvas'),
+    }
+  })
+  expect(incubationLayers.source).toBeLessThan(incubationLayers.shader)
+  expect(incubationLayers.wallNoise).toBeLessThan(incubationLayers.shader)
 
   await page.getByTestId('tool-select').click()
   const revealPoint = await cellVisualPoint(page, previewId ?? '')
@@ -2055,7 +2286,13 @@ test('clips cells to the circle and stays fitted at desktop and mobile widths', 
   expect(mobile.cellCount).toBe(initial.cellCount)
   expect(mobile.field.radius).toBeLessThan(initial.field.radius)
   await expect(page.getByRole('toolbar', { name: 'Canvas tools' })).toBeVisible()
-  for (const id of ['history-undo', 'tool-add', 'tool-select', 'tool-group', 'list-view-toggle']) {
+  for (const id of [
+    'history-undo',
+    'tool-add',
+    'tool-select',
+    'autogroup-toggle',
+    'list-view-toggle',
+  ]) {
     const box = await page.getByTestId(id).boundingBox()
     expect(box?.x).toBeGreaterThanOrEqual(0)
     expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(390)

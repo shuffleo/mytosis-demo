@@ -80,10 +80,43 @@ test('starts in list view and presents local-day date states', async ({ page }) 
   await expect(page.getByTestId('date-rail')).toHaveAttribute('data-theme', 'list')
   const listRailSurface = await page.getByTestId('date-rail').evaluate((rail) => ({
     background: getComputedStyle(rail).backgroundColor,
+    border: getComputedStyle(rail).borderStyle,
+    radius: getComputedStyle(rail).borderRadius,
+    shadow: getComputedStyle(rail).boxShadow,
     position: getComputedStyle(rail.parentElement!).position,
   }))
-  expect(listRailSurface.background).toBe('rgb(243, 245, 241)')
+  expect(listRailSurface).toMatchObject({
+    background: 'rgba(0, 0, 0, 0)',
+    border: 'none',
+    radius: '0px',
+    shadow: 'none',
+  })
   expect(listRailSurface.position).toBe('sticky')
+  await expect(page.getByTestId('date-calendar-trigger')).toHaveCSS(
+    'border-radius',
+    '0px',
+  )
+  await expect(page.locator('.date-rail__day button').first()).toHaveCSS(
+    'border-radius',
+    '0px',
+  )
+  const toolbarGeometry = await page.locator('.toolbar-dock').evaluate((toolbar) => {
+    const capsules = [...toolbar.querySelectorAll<HTMLElement>('.toolbar-capsule')]
+    const buttons = [...toolbar.querySelectorAll<HTMLElement>('button')]
+    const labeledButtons = [...toolbar.querySelectorAll<HTMLElement>(
+      '.toolbar-labeled-button',
+    )]
+    return {
+      capsuleRadii: capsules.map((element) => getComputedStyle(element).borderRadius),
+      buttonRadii: buttons.map((element) => getComputedStyle(element).borderRadius),
+      dividers: labeledButtons.map(
+        (element) => getComputedStyle(element, '::before').content,
+      ),
+    }
+  })
+  expect(toolbarGeometry.capsuleRadii.every((radius) => radius === '0px')).toBe(true)
+  expect(toolbarGeometry.buttonRadii.every((radius) => radius === '0px')).toBe(true)
+  expect(toolbarGeometry.dividers.every((content) => content === 'none')).toBe(true)
   const todayKey = await selectedDayKey(page)
   await expect(
     page.locator(`.date-rail__day button[data-day-key="${todayKey}"]`),
@@ -124,8 +157,32 @@ test('starts in list view and presents local-day date states', async ({ page }) 
   )
   await expect(page.getByTestId('date-rail')).toHaveCSS(
     'background-color',
-    'rgb(21, 25, 22)',
+    'rgb(0, 0, 0)',
   )
+  const microscopeToolbarGeometry = await page.locator('.toolbar-dock').evaluate((toolbar) => {
+    const labeledButtons = [...toolbar.querySelectorAll<HTMLElement>(
+      '.toolbar-labeled-button',
+    )]
+    const active = toolbar.querySelector<HTMLElement>('.is-active-tool')
+    return {
+      buttonRadii: [...toolbar.querySelectorAll<HTMLElement>('button')].map(
+        (element) => getComputedStyle(element).borderRadius,
+      ),
+      dividers: labeledButtons.map(
+        (element) => getComputedStyle(element, '::before').content,
+      ),
+      activeUnderlineRadius: active
+        ? getComputedStyle(active, '::after').borderRadius
+        : null,
+    }
+  })
+  expect(
+    microscopeToolbarGeometry.buttonRadii.every((radius) => radius === '0px'),
+  ).toBe(true)
+  expect(
+    microscopeToolbarGeometry.dividers.every((content) => content === 'none'),
+  ).toBe(true)
+  expect(microscopeToolbarGeometry.activeUnderlineRadius).toBe('0px')
   const microscopeGeometry = await page.getByTestId('date-rail').evaluate((rail) => {
     const month = rail.querySelector('.date-rail__month')!.getBoundingClientRect()
     const days = rail.querySelector('.date-rail__days')!.getBoundingClientRect()
@@ -187,11 +244,32 @@ test('travels through days directionally and supports wheel plus Today recovery'
 
   await past.click()
   await expect(page.locator('.app-shell')).toHaveClass(/date-transition-backward-/)
+  const listSlide = await page.getByTestId('list-view').evaluate((view) => {
+    const animation = getComputedStyle(view)
+    const matrix = new DOMMatrixReadOnly(animation.transform)
+    return {
+      animationName: animation.animationName,
+      timingFunction: animation.animationTimingFunction,
+      scaleX: matrix.a,
+      skewY: matrix.b,
+      skewX: matrix.c,
+      scaleY: matrix.d,
+    }
+  })
+  expect(listSlide).toMatchObject({
+    animationName: 'journal-list-day-backward-out',
+    timingFunction: 'linear',
+    scaleX: 1,
+    skewY: 0,
+    skewX: 0,
+    scaleY: 1,
+  })
   await expect.poll(() => selectedDayKey(page)).toBe(pastKey)
   await expect(page.locator('.app-shell')).not.toHaveClass(/date-transition-/)
   const todayButton = page.getByTestId('date-rail-today')
   await expect(todayButton).toBeVisible()
   await expect(todayButton).toBeEnabled()
+  await expect(todayButton).toHaveCSS('border-radius', '0px')
   await expect(
     page.locator(`.date-rail__day button[data-day-key="${todayKey}"] .date-rail__today-dot`),
   ).toBeVisible()
@@ -257,11 +335,16 @@ test('clears persisted journal pages with the confirmation-backed sidebar reset'
   const pastKey = await past.getAttribute('data-day-key')
   if (!pastKey) throw new Error('Past day key is missing')
   await past.click()
+  await expect.poll(() => selectedDayKey(page)).toBe(pastKey)
   await page.locator('[data-list-cell]').first().fill('Temporary local journal data.')
   await page.getByTestId('date-calendar-trigger').click()
   await page.keyboard.press('Escape')
   await page.reload()
-  await page.locator(`.date-rail__day button[data-day-key="${pastKey}"]`).click()
+  const restoredPast = page.locator(
+    `.date-rail__day button[data-day-key="${pastKey}"]`,
+  )
+  await restoredPast.click()
+  await expect.poll(() => selectedDayKey(page)).toBe(pastKey)
   await expect(page.locator('[data-list-cell]').first()).toHaveValue(
     'Temporary local journal data.',
   )
@@ -461,28 +544,41 @@ test('uses native caret geometry across focused zoom, DPR, and font sizes', asyn
 
     for (const fontSize of [9, 13, 17]) {
       await editor.evaluate((element, size) => {
-        element.style.fontSize = `${size}px`
-        element.style.lineHeight = `${size * 1.22}px`
+        element.style.setProperty('font-size', `${size}px`, 'important')
+        element.style.setProperty('line-height', `${size * 1.22}px`, 'important')
+        element.style.setProperty('padding-block', '0', 'important')
       }, fontSize)
       const box = await editor.boundingBox()
       if (!box) throw new Error('Native editor bounds are missing')
-      await page.mouse.click(box.x + box.width * 0.22, box.y + box.height * 0.5)
+      const firstLineY = await editor.evaluate((element) => {
+        const style = getComputedStyle(element)
+        const matrix = new DOMMatrixReadOnly(style.transform)
+        const scale = Math.hypot(matrix.a, matrix.b)
+        return Number.parseFloat(style.lineHeight) * scale * 0.65
+      })
+      await page.mouse.click(box.x + box.width * 0.22, box.y + firstLineY)
       const left = await editor.evaluate((element) => element.selectionStart)
-      await page.mouse.click(box.x + box.width * 0.78, box.y + box.height * 0.5)
+      await page.mouse.click(box.x + box.width * 0.78, box.y + firstLineY)
       const right = await editor.evaluate((element) => element.selectionStart)
       expect(right, `font size ${fontSize}px`).toBeGreaterThan(left)
     }
 
     const selectionBox = await editor.boundingBox()
     if (!selectionBox) throw new Error('Native editor selection bounds are missing')
+    const selectionLineY = await editor.evaluate((element) => {
+      const style = getComputedStyle(element)
+      const matrix = new DOMMatrixReadOnly(style.transform)
+      const scale = Math.hypot(matrix.a, matrix.b)
+      return Number.parseFloat(style.lineHeight) * scale * 0.65
+    })
     await page.mouse.move(
       selectionBox.x + selectionBox.width * 0.2,
-      selectionBox.y + selectionBox.height * 0.5,
+      selectionBox.y + selectionLineY,
     )
     await page.mouse.down()
     await page.mouse.move(
       selectionBox.x + selectionBox.width * 0.8,
-      selectionBox.y + selectionBox.height * 0.5,
+      selectionBox.y + selectionLineY,
       { steps: 8 },
     )
     await page.mouse.up()

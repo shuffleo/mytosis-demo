@@ -83,3 +83,32 @@ export function splitJitterState({
   if (reducedMotion) return 0
   return easeInteraction(elapsedMs / Math.max(1, attackMs), easing)
 }
+
+export interface GroupCueStrengthInput {
+  spatialProgress: number
+  dwellElapsedMs: number
+  dwellMs: number
+  easing: InteractionEasing
+}
+
+export function groupCueStrength({
+  spatialProgress,
+  dwellElapsedMs,
+  dwellMs,
+  easing,
+}: GroupCueStrengthInput) {
+  const spatial = easeInteraction(spatialProgress, easing)
+  const dwell = easeInteraction(dwellElapsedMs / Math.max(1, dwellMs), easing)
+  return spatial * (0.28 + dwell * 0.72)
+}
+
+export function groupCuePhase(
+  elapsedSeconds: number,
+  frequencyHz: number,
+  offsetTurns = 0,
+) {
+  return (
+    Math.max(0, elapsedSeconds) * Math.PI * 2 * Math.max(0.01, frequencyHz) +
+    offsetTurns * Math.PI * 2
+  )
+}

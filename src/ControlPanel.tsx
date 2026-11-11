@@ -112,8 +112,18 @@ const CONTROL_HINTS: Record<string, string> = {
   detach: 'Distance a member must cross before leaving its group.',
   motion: 'Chooses the group settling curve.',
   'attach contacts': 'Required member contacts before a dragged cell joins a group.',
-  'attach reach': 'Distance from a group wall where a held cell can begin a sticky attachment.',
-  'attach hold ms': 'How long a cell must rest by a group wall before the sticky bridge arms.',
+  'join threshold px': 'Outer wall distance where join cues begin and a held cell can attach.',
+  'detach threshold': 'Normalized group-center pull where a detached member can commit.',
+  'dwell ms': 'Shared hold time for arming either a join or a detach.',
+  'cue frequency hz': 'Frequency shared by the dragged cell and target group wall oscillator.',
+  'cell amplitude px': 'Maximum translation amplitude of the dragged cell cue.',
+  'wall amplitude px': 'Maximum radial vibration amplitude of the target group wall cue.',
+  'stroke excitation px': 'Maximum temporary group-wall stroke expansion at full cue strength.',
+  'phase offset': 'Wall oscillator offset from the dragged cell, measured in turns.',
+  'ghost size px': 'Equivalent radius of the transient solver-only landing or removal slot.',
+  'ghost repulsion': 'How strongly grouped solver sites yield around the transient slot.',
+  'ghost response': 'How quickly the transient slot enters, follows, and clears.',
+  'cue easing': 'Shapes cue amplitude, dwell, and transient slot strength.',
   'automatic groups': 'Lets silhouette scoring choose the clustering count.',
   'minimum groups': 'Lowest group count considered during automatic clustering.',
   'maximum groups': 'Highest group count considered during automatic clustering.',
@@ -726,12 +736,6 @@ export function ControlPanel({
       max: 0.7,
       step: 0.01,
     })
-    group.addBinding(params.group, 'detachThreshold', {
-      label: 'detach',
-      min: 0.4,
-      max: 1.2,
-      step: 0.01,
-    })
     group.addBinding(params.group, 'motionEasing', {
       label: 'motion',
       options: { Smooth: 'smooth', Spring: 'spring', Direct: 'direct' },
@@ -742,17 +746,76 @@ export function ControlPanel({
       max: 4,
       step: 1,
     })
-    group.addBinding(params.group, 'attachDistancePx', {
-      label: 'attach reach',
+    const groupCues = group.addFolder({ title: 'Join / detach cues', expanded: false })
+    groupCues.addBinding(params.group, 'attachDistancePx', {
+      label: 'join threshold px',
       min: 12,
       max: 90,
       step: 1,
     })
-    group.addBinding(params.group, 'attachHoldMs', {
-      label: 'attach hold ms',
+    groupCues.addBinding(params.group, 'detachThreshold', {
+      label: 'detach threshold',
+      min: 0.2,
+      max: 1.2,
+      step: 0.01,
+    })
+    groupCues.addBinding(params.group, 'attachHoldMs', {
+      label: 'dwell ms',
       min: 120,
       max: 1800,
       step: 20,
+    })
+    groupCues.addBinding(params.group, 'cueFrequencyHz', {
+      label: 'cue frequency hz',
+      min: 0.5,
+      max: 18,
+      step: 0.5,
+    })
+    groupCues.addBinding(params.group, 'cueCellAmplitudePx', {
+      label: 'cell amplitude px',
+      min: 0,
+      max: 8,
+      step: 0.1,
+    })
+    groupCues.addBinding(params.group, 'cueWallAmplitudePx', {
+      label: 'wall amplitude px',
+      min: 0,
+      max: 12,
+      step: 0.1,
+    })
+    groupCues.addBinding(params.group, 'cueStrokeExcitation', {
+      label: 'stroke excitation px',
+      min: 0,
+      max: 12,
+      step: 0.25,
+    })
+    groupCues.addBinding(params.group, 'cuePhaseOffset', {
+      label: 'phase offset',
+      min: -0.5,
+      max: 0.5,
+      step: 0.01,
+    })
+    groupCues.addBinding(params.group, 'ghostSizePx', {
+      label: 'ghost size px',
+      min: 8,
+      max: 96,
+      step: 1,
+    })
+    groupCues.addBinding(params.group, 'ghostRepulsion', {
+      label: 'ghost repulsion',
+      min: 0,
+      max: 1,
+      step: 0.01,
+    })
+    groupCues.addBinding(params.group, 'ghostResponse', {
+      label: 'ghost response',
+      min: 2,
+      max: 30,
+      step: 1,
+    })
+    groupCues.addBinding(params.group, 'cueEasing', {
+      label: 'cue easing',
+      options: { Smooth: 'smooth', Spring: 'spring', Linear: 'linear' },
     })
 
     const clustering = pane.addFolder({ title: 'Autogroup', expanded: false })
