@@ -58,4 +58,17 @@ describe('responsive layout', () => {
     expect(layout.keyboardConstrained).toBe(true)
     expect(layout.usable.bottom).toBe(418)
   })
+
+  it('preserves the established expanded desktop field bounds', () => {
+    const layout = calculateResponsiveLayout({
+      width: 1440,
+      height: 900,
+      visualWidth: 1440,
+      visualHeight: 900,
+      visualOffsetTop: 0,
+      visualOffsetLeft: 0,
+      keyboardInset: 0,
+    })
+    expect(layout.usable).toEqual({ top: 0, right: 0, bottom: 0, left: 0 })
+  })
 })

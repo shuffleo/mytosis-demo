@@ -67,6 +67,17 @@ export function calculateResponsiveLayout(
     }
   }
 
+  if (className === 'expanded') {
+    return {
+      className,
+      orientation,
+      keyboardConstrained,
+      dateChromeHeight: 74,
+      toolbarHeight: 72,
+      usable: { top: 0, right: 0, bottom: 0, left: 0 },
+    }
+  }
+
   const compact = className === 'compact-portrait'
   const dateChromeHeight = compact ? 64 : 74
   const toolbarHeight = compact ? 64 : 72

@@ -1545,6 +1545,7 @@
 .has-coarse-pointer .toolbar-icon-button,
 .has-coarse-pointer .toolbar-labeled-button,
 .has-coarse-pointer .settings-toggle {
+  min-width: 44px;
   min-height: 44px;
 }
 
