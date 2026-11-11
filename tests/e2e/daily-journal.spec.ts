@@ -244,6 +244,15 @@ test('travels through days directionally and supports wheel plus Today recovery'
 
   await past.click()
   await expect(page.locator('.app-shell')).toHaveClass(/date-transition-backward-/)
+  await expect(page.locator('.date-rail__days')).toHaveAttribute(
+    'data-travel-direction',
+    'backward',
+  )
+  expect(
+    await page.locator('.date-rail__days').evaluate(
+      (element) => element.getAnimations().length,
+    ),
+  ).toBeGreaterThan(0)
   const listSlide = await page.getByTestId('list-view').evaluate((view) => {
     const animation = getComputedStyle(view)
     const matrix = new DOMMatrixReadOnly(animation.transform)
@@ -257,13 +266,26 @@ test('travels through days directionally and supports wheel plus Today recovery'
     }
   })
   expect(listSlide).toMatchObject({
-    animationName: 'journal-list-day-backward-out',
     timingFunction: 'linear',
     scaleX: 1,
     skewY: 0,
     skewX: 0,
     scaleY: 1,
   })
+  expect(listSlide.animationName).toMatch(/^journal-list-day-backward-(out|in)$/)
+  const transitionSurfaces = await page.evaluate(() => {
+    const shell = getComputedStyle(document.querySelector('.app-shell')!)
+    const page = getComputedStyle(document.querySelector('.list-editor')!)
+    return {
+      shellBackground: shell.backgroundImage,
+      pageBackground: page.backgroundImage,
+      divider: page.boxShadow,
+    }
+  })
+  expect(transitionSurfaces.shellBackground).toBe(
+    transitionSurfaces.pageBackground,
+  )
+  expect(transitionSurfaces.divider).not.toBe('none')
   await expect.poll(() => selectedDayKey(page)).toBe(pastKey)
   await expect(page.locator('.app-shell')).not.toHaveClass(/date-transition-/)
   const todayButton = page.getByTestId('date-rail-today')
@@ -281,6 +303,9 @@ test('travels through days directionally and supports wheel plus Today recovery'
   expect(attachedGeometry).toBeLessThanOrEqual(7)
 
   await page.getByTestId('date-rail').dispatchEvent('wheel', { deltaY: 80 })
+  await page.waitForTimeout(100)
+  expect(await selectedDayKey(page)).toBe(pastKey)
+  await page.getByTestId('date-rail').dispatchEvent('wheel', { deltaX: 80 })
   await expect(page.locator('.app-shell')).toHaveClass(/date-transition-forward-/)
   await expect.poll(() => selectedDayKey(page)).toBe(todayKey)
 
@@ -300,6 +325,52 @@ test('travels through days directionally and supports wheel plus Today recovery'
   await expect(todayButton).toBeEnabled()
   await todayButton.click()
   await expect.poll(() => selectedDayKey(page)).toBe(todayKey)
+})
+
+test('coalesces rapid date travel and settles the rail without overshoot', async ({
+  page,
+}) => {
+  const todayKey = await selectedDayKey(page)
+  const selectable = page.locator('.date-rail__day button:not(:disabled)')
+  const first = selectable.nth(1)
+  const second = selectable.nth(3)
+  const firstKey = await first.getAttribute('data-day-key')
+  const secondKey = await second.getAttribute('data-day-key')
+  if (!firstKey || !secondKey || firstKey === todayKey || secondKey === todayKey) {
+    throw new Error('Rapid travel fixtures are missing')
+  }
+  await first.click()
+  await page.waitForTimeout(70)
+  await second.click()
+  await expect.poll(() => selectedDayKey(page)).toBe(secondKey)
+  await expect(page.locator('.app-shell')).not.toHaveClass(/date-transition-/)
+  await expect
+    .poll(() =>
+      page.locator('.date-rail__days').evaluate((element) => {
+        const transform = getComputedStyle(element).transform
+        return transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m41
+      }),
+    )
+    .toBe(0)
+})
+
+test('makes date travel immediate when reduced motion is requested', async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.reload()
+  const todayKey = await selectedDayKey(page)
+  const past = await nearestPastDay(page, todayKey)
+  const pastKey = await past.getAttribute('data-day-key')
+  if (!pastKey) throw new Error('Past day key is missing')
+  await past.click()
+  await expect.poll(() => selectedDayKey(page)).toBe(pastKey)
+  await expect(page.locator('.app-shell')).not.toHaveClass(/date-transition-/)
+  expect(
+    await page.locator('.date-rail__days').evaluate(
+      (element) => element.getAnimations().length,
+    ),
+  ).toBe(0)
 })
 
 test('keeps a selected microscope palette global across day pages', async ({ page }) => {

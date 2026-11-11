@@ -41,6 +41,16 @@ function clampToToday(dayKey: DayKey, todayDayKey: DayKey) {
   return compareDayKeys(dayKey, todayDayKey) > 0 ? todayDayKey : dayKey
 }
 
+function dayDistance(first: DayKey, second: DayKey) {
+  const firstParts = parseDayKey(first)
+  const secondParts = parseDayKey(second)
+  return Math.round(
+    (Date.UTC(secondParts.year, secondParts.month - 1, secondParts.day) -
+      Date.UTC(firstParts.year, firstParts.month - 1, firstParts.day)) /
+      86_400_000,
+  )
+}
+
 function dayAriaLabel(
   dayKey: DayKey,
   todayDayKey: DayKey,
@@ -89,6 +99,7 @@ export function DateRail({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const daysRef = useRef<HTMLDivElement>(null)
+  const railAnimationRef = useRef<Animation | null>(null)
   const previousActiveDayRef = useRef(activeDayKey)
   const wheelAccumulatorRef = useRef(0)
   const wheelLockedRef = useRef(false)
@@ -157,24 +168,60 @@ export function DateRail({
   useEffect(() => {
     const previous = previousActiveDayRef.current
     previousActiveDayRef.current = activeDayKey
-    if (
-      previous === activeDayKey ||
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    ) {
+    const rail = daysRef.current
+    if (!rail || previous === activeDayKey) return
+    const reducedMotion = window.matchMedia(
+      '(prefers-reduced-motion: reduce)',
+    ).matches
+    if (reducedMotion) {
+      railAnimationRef.current?.cancel()
+      railAnimationRef.current = null
+      rail.style.removeProperty('transform')
       return
     }
-    const direction = compareDayKeys(activeDayKey, previous) > 0 ? 1 : -1
-    daysRef.current?.animate(
+    const delta = dayDistance(previous, activeDayKey)
+    const direction = delta > 0 ? 1 : -1
+    const computedTransform = getComputedStyle(rail).transform
+    const matrix =
+      computedTransform === 'none'
+        ? null
+        : new DOMMatrixReadOnly(computedTransform)
+    const currentOffset = matrix && Number.isFinite(matrix.m41) ? matrix.m41 : 0
+    railAnimationRef.current?.cancel()
+    const maximumTravel = Math.max(48, rail.clientWidth * 0.72)
+    const travel = Math.min(Math.abs(delta) * 48, maximumTravel)
+    const start = Math.max(
+      -maximumTravel,
+      Math.min(maximumTravel, currentOffset + direction * travel),
+    )
+    rail.dataset.travelDirection = direction > 0 ? 'forward' : 'backward'
+    const animation = rail.animate(
       [
-        { transform: `translateX(${direction * 14}px)`, opacity: 0.76 },
-        { transform: 'translateX(0)', opacity: 1 },
+        { transform: `translateX(${start}px)` },
+        { transform: 'translateX(0)' },
       ],
       {
-        duration: 520,
-        easing: 'linear(0, .56 18%, .92 38%, 1.06 56%, .98 76%, 1)',
+        duration: 360 + Math.min(180, Math.abs(delta) * 24),
+        easing: 'cubic-bezier(.22,.61,.36,1)',
       },
     )
+    railAnimationRef.current = animation
+    animation.onfinish = () => {
+      if (railAnimationRef.current !== animation) return
+      railAnimationRef.current = null
+      rail.style.removeProperty('transform')
+    }
+    return () => {
+      animation.onfinish = null
+    }
   }, [activeDayKey])
+
+  useEffect(
+    () => () => {
+      railAnimationRef.current?.cancel()
+    },
+    [],
+  )
 
   const selectDay = (dayKey: DayKey) => {
     if (!isSelectableDay(dayKey, todayDayKey)) return
@@ -184,8 +231,8 @@ export function DateRail({
 
   const handleRailWheel = (event: React.WheelEvent<HTMLElement>) => {
     if (disabled || calendarOpen) return
-    const dominantDelta =
-      Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+    if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return
+    const dominantDelta = event.deltaX
     if (Math.abs(dominantDelta) < 0.5) return
     event.preventDefault()
     if (wheelLockedRef.current) return
@@ -398,7 +445,7 @@ export function DateRail({
         role="list"
         aria-label="Nearby journal days"
       >
-        {railDays.map((dayKey) => {
+        {railDays.map((dayKey, index) => {
           const hasContent = contentDayKeys.has(dayKey)
           const status = getDateStatus(dayKey, todayDayKey, hasContent)
           const selected = dayKey === activeDayKey
@@ -407,6 +454,10 @@ export function DateRail({
             <div
               className={`date-rail__day is-${status} ${
                 dayKey === todayDayKey ? 'is-today' : ''
+              } ${
+                Math.abs(index - Math.floor(normalizedDayCount / 2)) <= 1
+                  ? 'is-near-selected'
+                  : ''
               }`.trim()}
               role="listitem"
               key={dayKey}

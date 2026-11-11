@@ -98,7 +98,23 @@
   min-width: 0;
   max-width: calc(100% - 80px);
   overflow-x: auto;
+  scroll-behavior: smooth;
   scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent
+  );
+  will-change: transform;
 }
 
 .date-rail__days::-webkit-scrollbar {
@@ -411,5 +427,10 @@
   .date-rail *::after {
     scroll-behavior: auto;
     transition: none !important;
+  }
+
+  .date-rail__days {
+    transform: none !important;
+    animation: none !important;
   }
 }

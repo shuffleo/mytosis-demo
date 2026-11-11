@@ -269,7 +269,15 @@ function App() {
     }
   }
   const selectDay = (nextDayKey: DayKey) => {
-    if (nextDayKey === selectedDayKeyRef.current || transitionActive) return
+    if (
+      nextDayKey === selectedDayKeyRef.current ||
+      viewTransition !== null ||
+      clusteringActive
+    ) {
+      return
+    }
+    for (const timer of transitionTimersRef.current) window.clearTimeout(timer)
+    transitionTimersRef.current = []
     adaptiveTextCoordinatorRef.current?.cancelAll()
     const previousDayKey = selectedDayKeyRef.current
     const currentDocument =
@@ -308,6 +316,7 @@ function App() {
       !settingsRef.current.viewTransition.enabled ||
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
     ) {
+      setDateTransition(null)
       applyNextDay()
       return
     }
@@ -519,7 +528,7 @@ function App() {
 
   return (
     <div
-      className={`app-shell layout-${responsive.layout.className} ${
+      className={`app-shell app-shell--${view} layout-${responsive.layout.className} ${
         responsive.layout.keyboardConstrained ? 'is-keyboard-constrained' : ''
       } ${responsive.coarsePointer ? 'has-coarse-pointer' : ''} ${
         stageEditing ? 'is-stage-editing' : ''
@@ -532,7 +541,11 @@ function App() {
       data-orientation={responsive.layout.orientation}
       data-keyboard-constrained={responsive.layout.keyboardConstrained}
       data-coarse-pointer={responsive.coarsePointer}
-      style={{ background: settings.palette.exterior, ...transitionStyle }}
+      style={{
+        background:
+          view === 'list' ? 'var(--paper-background)' : settings.palette.exterior,
+        ...transitionStyle,
+      }}
     >
       <VoronoiStage
         ref={stageRef}
@@ -577,7 +590,7 @@ function App() {
           onSelectDay={selectDay}
           contentDayKeys={contentDayKeys}
           theme={view}
-          disabled={clusteringActive || transitionActive}
+          disabled={clusteringActive || viewTransition !== null}
         />
       </div>
       {showTouchActions ? (

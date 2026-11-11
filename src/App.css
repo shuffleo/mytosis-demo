@@ -11,6 +11,14 @@
 }
 
 .app-shell {
+  --paper-background:
+    radial-gradient(
+      circle at 50% 16%,
+      rgba(255, 255, 255, 0.96),
+      rgba(235, 237, 233, 0.98) 54%
+    ),
+    #eceeea;
+  --paper-divider: rgba(57, 65, 60, 0.16);
   background: #000;
 }
 
@@ -782,9 +790,19 @@
   inset: 0;
   overflow: auto;
   color: #282d2a;
-  background:
-    radial-gradient(circle at 50% 16%, rgba(255, 255, 255, 0.96), rgba(235, 237, 233, 0.98) 54%),
-    #eceeea;
+  background: var(--paper-background);
+}
+
+.date-transition-forward-out .list-editor,
+.date-transition-forward-in .list-editor {
+  box-shadow: 1px 0 0 var(--paper-divider);
+  will-change: transform;
+}
+
+.date-transition-backward-out .list-editor,
+.date-transition-backward-in .list-editor {
+  box-shadow: -1px 0 0 var(--paper-divider);
+  will-change: transform;
 }
 
 .list-editor-column {
@@ -1410,6 +1428,10 @@
 
 .layout-compact-landscape .date-rail__day button {
   height: 44px;
+}
+
+.layout-compact-landscape .date-rail__day:not(.is-near-selected) {
+  display: none;
 }
 
 .layout-compact-landscape .toolbar-dock {
