@@ -15,6 +15,7 @@ import {
   type CanvasMode,
   type EditPresentation,
   type EditorLayout,
+  type ViewportInsets,
   type VoronoiDebugSnapshot,
 } from './voronoi-engine'
 import {
@@ -82,6 +83,7 @@ interface VoronoiStageProps {
   blocked: boolean
   suspended: boolean
   clusteringWave: boolean
+  viewportInsets: ViewportInsets
   onPostProcessingStatus: (status: PostProcessStatus) => void
   onHistoryChanged: (canUndo: boolean, canRedo: boolean) => void
   onEditingChanged?: (editing: boolean) => void
@@ -121,6 +123,7 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
   blocked,
   suspended,
   clusteringWave,
+  viewportInsets,
   onPostProcessingStatus,
   onHistoryChanged,
   onEditingChanged,
@@ -423,6 +426,10 @@ export const VoronoiStage = forwardRef<VoronoiStageHandle, VoronoiStageProps>(fu
     postProcessorRef.current?.setSuspended(suspended)
     if (!suspended && !blocked) engine.startEmptySingletonEditing()
   }, [blocked, clusteringWave, suspended])
+
+  useEffect(() => {
+    engineRef.current?.setViewportInsets(viewportInsets)
+  }, [viewportInsets])
 
   useEffect(() => {
     if (seedAuditRequest === previousSeedAuditRequestRef.current) return

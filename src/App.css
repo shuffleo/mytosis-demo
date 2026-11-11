@@ -1226,3 +1226,231 @@
     transition: none;
   }
 }
+
+/* Responsive viewport contract */
+.app-shell {
+  width: 100%;
+  height: 100vh;
+  height: 100svh;
+  height: 100dvh;
+}
+
+.journal-date-rail {
+  height: var(--date-chrome-height);
+  padding-top: max(8px, var(--safe-top));
+  padding-right: max(8px, var(--safe-right));
+  padding-left: max(8px, var(--safe-left));
+}
+
+.list-editor-column {
+  padding-bottom: calc(var(--toolbar-height) + var(--safe-bottom) + 24px);
+}
+
+.list-block textarea:focus {
+  scroll-margin-top: calc(var(--date-chrome-height) + 16px);
+  scroll-margin-bottom: calc(
+    var(--toolbar-height) + var(--visual-viewport-bottom) + 24px
+  );
+}
+
+.layout-compact-portrait .date-rail {
+  min-height: 56px;
+  padding: 2px 4px;
+}
+
+.layout-compact-portrait .journal-date-rail,
+.layout-compact-landscape .journal-date-rail {
+  position: fixed;
+}
+
+.layout-compact-portrait .date-rail__month,
+.layout-compact-portrait .date-rail__day button {
+  min-width: 48px;
+  height: 48px;
+}
+
+.layout-compact-portrait .date-rail__days {
+  scroll-snap-type: x proximity;
+  overscroll-behavior-inline: contain;
+}
+
+.layout-compact-portrait .date-rail__day {
+  min-width: 48px;
+  scroll-snap-align: center;
+}
+
+.layout-compact-portrait .toolbar-dock {
+  right: max(8px, var(--safe-right));
+  bottom: max(8px, var(--safe-bottom));
+  left: max(8px, var(--safe-left));
+  justify-content: center;
+  gap: 4px;
+  max-width: none;
+  transform: none;
+}
+
+.layout-compact-portrait .toolbar-capsule {
+  min-height: 56px;
+  padding: 4px;
+}
+
+.layout-compact-portrait .toolbar-icon-button,
+.layout-compact-portrait .toolbar-labeled-button {
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  padding-inline: 4px;
+}
+
+.layout-compact-portrait .toolbar-labeled-button {
+  gap: 0;
+  font-size: 0;
+}
+
+.layout-compact-portrait .toolbar-labeled-button .toolbar-icon {
+  flex-basis: 24px;
+  width: 24px;
+  height: 24px;
+}
+
+.layout-compact-portrait .settings-shell {
+  top: auto;
+  right: max(8px, var(--safe-right));
+  bottom: max(8px, var(--safe-bottom));
+  left: max(8px, var(--safe-left));
+  width: auto;
+  max-height: min(88dvh, calc(100dvh - var(--safe-top) - 16px));
+  padding: 12px;
+  border-radius: 0;
+  overscroll-behavior: contain;
+}
+
+.layout-compact-portrait .settings-toggle {
+  right: max(12px, var(--safe-right));
+  bottom: calc(var(--toolbar-height) + var(--safe-bottom) + 16px);
+  width: 48px;
+  height: 48px;
+  border-radius: 0;
+}
+
+.layout-compact-portrait .date-calendar {
+  position: fixed;
+  top: auto;
+  right: max(8px, var(--safe-right));
+  bottom: max(8px, var(--safe-bottom));
+  left: max(8px, var(--safe-left));
+  width: auto;
+  max-height: min(88dvh, calc(100dvh - var(--safe-top) - 16px));
+  overflow: auto;
+  border-radius: 0;
+}
+
+.layout-compact-portrait .date-calendar__nav,
+.layout-compact-portrait .date-calendar__cell button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.layout-compact-portrait .list-editor-column {
+  width: calc(100vw - 32px);
+  padding-top: calc(var(--date-chrome-height) + 24px);
+}
+
+.layout-compact-portrait .list-block {
+  min-height: 44px;
+  padding-inline: 0;
+}
+
+.layout-compact-portrait .list-block textarea {
+  min-height: 44px;
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.layout-compact-landscape .journal-date-rail {
+  right: calc(var(--toolbar-height) + var(--safe-right));
+  width: auto;
+  height: 48px;
+}
+
+.layout-compact-landscape .date-rail {
+  min-height: 44px;
+  justify-content: flex-start;
+  padding: 0 4px;
+}
+
+.layout-compact-landscape .date-rail__month {
+  min-width: 72px;
+  height: 44px;
+}
+
+.layout-compact-landscape .date-rail__day button {
+  height: 44px;
+}
+
+.layout-compact-landscape .toolbar-dock {
+  top: max(8px, var(--safe-top));
+  right: max(8px, var(--safe-right));
+  bottom: max(8px, var(--safe-bottom));
+  left: auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  max-width: 56px;
+  transform: none;
+}
+
+.layout-compact-landscape .toolbar-capsule {
+  flex-direction: column;
+  min-height: 0;
+  padding: 2px;
+}
+
+.layout-compact-landscape .toolbar-icon-button,
+.layout-compact-landscape .toolbar-labeled-button {
+  width: 48px;
+  min-width: 48px;
+  height: 44px;
+  padding: 0;
+  font-size: 0;
+}
+
+.layout-compact-landscape .toolbar-labeled-button.is-active-tool::after {
+  top: 8px;
+  right: 0;
+  bottom: 8px;
+  left: auto;
+  width: 3px;
+  height: auto;
+}
+
+.layout-compact-landscape .settings-toggle {
+  right: calc(var(--toolbar-height) + var(--safe-right) + 8px);
+  bottom: max(8px, var(--safe-bottom));
+  border-radius: 0;
+}
+
+.layout-compact-landscape .settings-shell {
+  top: max(8px, var(--safe-top));
+  right: calc(var(--toolbar-height) + var(--safe-right) + 8px);
+  bottom: max(8px, var(--safe-bottom));
+  width: min(360px, 92vw);
+  max-height: none;
+  border-radius: 0;
+}
+
+.layout-compact-landscape .list-editor-column {
+  width: min(680px, calc(100vw - var(--toolbar-height) - 48px));
+  padding-top: calc(var(--date-chrome-height) + 16px);
+  padding-right: 16px;
+}
+
+.has-coarse-pointer .toolbar-icon-button,
+.has-coarse-pointer .toolbar-labeled-button,
+.has-coarse-pointer .settings-toggle {
+  min-height: 44px;
+}
+
+.is-keyboard-constrained .toolbar-dock {
+  bottom: calc(var(--visual-viewport-bottom) + var(--safe-bottom) + 8px);
+}

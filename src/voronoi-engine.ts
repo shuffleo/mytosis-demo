@@ -273,6 +273,13 @@ export interface CanvasFieldBounds {
   radius: number
 }
 
+export interface ViewportInsets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
 export interface WallRenderSnapshot {
   time: number
   width: number
@@ -453,6 +460,12 @@ export class VoronoiCanvasEngine {
   }
   private width = 1
   private height = 1
+  private viewportInsets: ViewportInsets = {
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  }
   private fieldCenter: Point2 = { x: 0, y: 0 }
   private fieldOuterRadius = 1
   private fieldRadius = 1
@@ -583,6 +596,23 @@ export class VoronoiCanvasEngine {
       this.sourceDirtyToken += 1
       this.scope.view.requestUpdate()
     }
+  }
+
+  setViewportInsets(insets: ViewportInsets) {
+    if (
+      this.viewportInsets.top === insets.top &&
+      this.viewportInsets.right === insets.right &&
+      this.viewportInsets.bottom === insets.bottom &&
+      this.viewportInsets.left === insets.left
+    ) {
+      return
+    }
+    this.viewportInsets = { ...insets }
+    this.groupSlotLayouts.clear()
+    this.groupTextFloors.clear()
+    this.updateFieldBounds()
+    this.sourceDirtyToken += 1
+    if (!this.suspended) this.scope.view.requestUpdate()
   }
 
   setTextVariants(
@@ -1244,12 +1274,24 @@ export class VoronoiCanvasEngine {
   }
 
   private updateFieldBounds() {
+    const usableWidth = Math.max(
+      1,
+      this.width - this.viewportInsets.left - this.viewportInsets.right,
+    )
+    const usableHeight = Math.max(
+      1,
+      this.height - this.viewportInsets.top - this.viewportInsets.bottom,
+    )
     this.fieldCenter = {
-      x: this.width * this.model.layout.circle.center.x,
-      y: this.height * this.model.layout.circle.center.y,
+      x:
+        this.viewportInsets.left +
+        usableWidth * this.model.layout.circle.center.x,
+      y:
+        this.viewportInsets.top +
+        usableHeight * this.model.layout.circle.center.y,
     }
     this.fieldOuterRadius =
-      Math.min(this.width, this.height) * this.model.layout.circle.radius
+      Math.min(usableWidth, usableHeight) * this.model.layout.circle.radius
     this.fieldRadius = Math.max(40, this.fieldOuterRadius - this.settings.geometry.outerGap)
   }
 

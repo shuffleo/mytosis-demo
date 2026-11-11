@@ -28,6 +28,7 @@ import {
   canonicalTextHash,
   type AdaptiveTextVariantMetadata,
 } from './adaptive-text'
+import { useResponsiveEnvironment } from './use-responsive-environment'
 import './App.css'
 
 function GearIcon() {
@@ -56,6 +57,7 @@ function abortableDelay(milliseconds: number, signal: AbortSignal) {
 }
 
 function App() {
+  const responsive = useResponsiveEnvironment()
   const [journalSession] = useState(() => {
     const store = createJournalStore()
     const today = new Date()
@@ -85,6 +87,7 @@ function App() {
   )
   const [autoGrowth, setAutoGrowth] = useState(false)
   const [panelOpen, setPanelOpen] = useState(false)
+  const [stageEditing, setStageEditing] = useState(false)
   const [seedAuditRequest, setSeedAuditRequest] = useState(0)
   const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false })
   const [postProcessingStatus, setPostProcessingStatus] = useState<
@@ -488,15 +491,30 @@ function App() {
         : settings.viewTransition.easing === 'spring'
           ? 'cubic-bezier(.2,.9,.25,1.12)'
           : 'cubic-bezier(.4,0,.2,1)',
+    '--visual-viewport-bottom': `${responsive.viewport.keyboardInset}px`,
+    '--date-chrome-height': `${responsive.layout.dateChromeHeight}px`,
+    '--toolbar-height': `${responsive.layout.toolbarHeight}px`,
+    '--usable-top': `${responsive.layout.usable.top}px`,
+    '--usable-right': `${responsive.layout.usable.right}px`,
+    '--usable-bottom': `${responsive.layout.usable.bottom}px`,
+    '--usable-left': `${responsive.layout.usable.left}px`,
   } as CSSProperties
 
   return (
     <div
-      className={`app-shell ${viewTransition ? `view-transition-${viewTransition}` : ''} ${
+      className={`app-shell layout-${responsive.layout.className} ${
+        responsive.layout.keyboardConstrained ? 'is-keyboard-constrained' : ''
+      } ${responsive.coarsePointer ? 'has-coarse-pointer' : ''} ${
+        stageEditing ? 'is-stage-editing' : ''
+      } ${viewTransition ? `view-transition-${viewTransition}` : ''} ${
         dateTransition
           ? `date-transition-${dateTransition.direction}-${dateTransition.phase}`
           : ''
       }`}
+      data-layout-class={responsive.layout.className}
+      data-orientation={responsive.layout.orientation}
+      data-keyboard-constrained={responsive.layout.keyboardConstrained}
+      data-coarse-pointer={responsive.coarsePointer}
       style={{ background: settings.palette.exterior, ...transitionStyle }}
     >
       <VoronoiStage
@@ -510,8 +528,10 @@ function App() {
         blocked={clusteringActive || transitionActive}
         suspended={view === 'list'}
         clusteringWave={clusteringActive}
+        viewportInsets={responsive.layout.usable}
         onPostProcessingStatus={setPostProcessingStatus}
         onHistoryChanged={handleHistoryChanged}
+        onEditingChanged={setStageEditing}
         onModeChanged={setMode}
         onCanonicalTextChanged={scheduleAdaptiveText}
         onSelectionChanged={(ids) => setSelectedCellIds([...ids])}
